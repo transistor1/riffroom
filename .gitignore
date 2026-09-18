@@ -1,0 +1,17 @@
+.env/
+.conda-pkgs/
+.cache/
+data/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+.DS_Store
+*.log
+
+*.egg-info/
+*.tsbuildinfo
