@@ -1,11 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { channelGain, MixerEngine } from "./audio";
 
+const soundTouchMock = vi.hoisted(() => {
+  const nodes: any[] = [];
+  const register = vi.fn(
+    async (context: any, url: string) =>
+      await context.audioWorklet.addModule(url),
+  );
+  class Node {
+    static register = register;
+    playbackRate = { value: 1 };
+    pitchSemitones = { value: 0 };
+    setStretchParameters = vi.fn();
+    disconnect = vi.fn();
+    constructor(public options: any) {
+      nodes.push(this);
+    }
+    connect(node: any) {
+      return node;
+    }
+  }
+  return { Node, nodes, register };
+});
+
+vi.mock("@soundtouchjs/audio-worklet", () => ({
+  SoundTouchNode: soundTouchMock.Node,
+}));
+vi.mock("@soundtouchjs/audio-worklet/processor?url", () => ({
+  default: "/assets/soundtouch-processor.js",
+}));
+
 const nodes: any[] = [];
 let clock: any;
 class Context {
   currentTime = 0;
   destination = {};
+  audioWorklet = { addModule: vi.fn(async () => {}) };
   resume = vi.fn(async () => {});
   close = vi.fn(async () => {});
   decodeAudioData = vi.fn(async () => ({ duration: 10 }));
@@ -29,6 +59,7 @@ class Context {
       attack: {},
       release: {},
       connect: vi.fn(),
+      disconnect: vi.fn(),
     };
   }
   createBufferSource() {
@@ -48,6 +79,7 @@ class Context {
     return source;
   }
 }
+
 const mix = {
   guitar: { volume: 1.5, muted: false, solo: false },
   drums: { volume: 0.7, muted: false, solo: false },
@@ -61,6 +93,8 @@ const stems = Object.keys(mix).map((name) => ({
 
 beforeEach(() => {
   nodes.length = 0;
+  soundTouchMock.nodes.length = 0;
+  soundTouchMock.register.mockClear();
   vi.stubGlobal("AudioContext", Context);
   vi.stubGlobal(
     "fetch",
@@ -96,7 +130,7 @@ it("starts all stems on the same clock and keeps a seek in sync", async () => {
   clock.currentTime = 2.04;
   expect(player.position()).toBeCloseTo(2);
   player.seek(5);
-  await Promise.resolve();
+  await vi.waitFor(() => expect(nodes).toHaveLength(4));
   expect(nodes[0].stop).toHaveBeenCalled();
   expect(nodes[2].start.mock.calls[0][1]).toBe(5);
   expect(nodes[2].start.mock.calls[0]).toEqual(nodes[3].start.mock.calls[0]);
@@ -113,6 +147,36 @@ it("loops and accounts for speed on the shared timeline", async () => {
   expect(player.position()).toBeCloseTo(2.5);
   expect(nodes[0].loop).toBe(true);
   expect(nodes[0].playbackRate.value).toBe(0.5);
+  player.dispose();
+});
+
+it("keeps tempo and requested pitch independent", async () => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  expect(soundTouchMock.register).toHaveBeenCalledWith(
+    clock,
+    "/assets/soundtouch-processor.js",
+  );
+  expect(soundTouchMock.nodes).toHaveLength(1);
+  expect(soundTouchMock.nodes[0].options).toEqual({
+    context: clock,
+    outputChannelCount: 2,
+  });
+  expect(soundTouchMock.nodes[0].setStretchParameters).toHaveBeenCalledWith({
+    sequenceMs: 80,
+    seekWindowMs: 20,
+    overlapMs: 12,
+    quickSeek: false,
+  });
+  player.setPitch(2);
+  expect(soundTouchMock.nodes[0].playbackRate.value).toBe(1);
+  expect(soundTouchMock.nodes[0].pitchSemitones.value).toBe(2);
+  player.setRate(0.5);
+  await player.play();
+  expect(nodes.map((node) => node.playbackRate.value)).toEqual([0.5, 0.5]);
+  const processor = soundTouchMock.nodes.at(-1);
+  expect(processor.playbackRate.value).toBe(0.5);
+  expect(processor.pitchSemitones.value).toBe(2);
   player.dispose();
 });
 

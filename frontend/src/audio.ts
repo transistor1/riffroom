@@ -1,3 +1,6 @@
+import { SoundTouchNode } from "@soundtouchjs/audio-worklet";
+// @ts-expect-error Vite resolves the package's documented processor asset import.
+import soundTouchProcessorUrl from "@soundtouchjs/audio-worklet/processor?url";
 import type { Mix, Stem } from "./types";
 
 export function channelGain(name: string, mix: Mix): number {
@@ -15,6 +18,9 @@ export function channelGain(name: string, mix: Mix): number {
 export class MixerEngine {
   context: AudioContext | null = null;
   private master: GainNode | null = null;
+  private limiter: DynamicsCompressorNode | null = null;
+  private soundTouch: SoundTouchNode | null = null;
+  private soundTouchRegistered = false;
   private buffers = new Map<string, AudioBuffer>();
   private sources = new Map<string, AudioBufferSourceNode>();
   private gains = new Map<string, GainNode>();
@@ -25,6 +31,7 @@ export class MixerEngine {
   playing = false;
   duration = 0;
   rate = 1;
+  pitchSemitones = 0;
   loop: { a: number; b: number; enabled: boolean } = {
     a: 0,
     b: 0,
@@ -45,9 +52,45 @@ export class MixerEngine {
       limiter.attack.value = 0.003;
       limiter.release.value = 0.1;
       this.master.gain.value = this.masterVolume;
-      this.master.connect(limiter).connect(this.context.destination);
+      limiter.connect(this.context.destination);
+      this.limiter = limiter;
     }
     return this.context;
+  }
+
+  private async initSoundTouch(ctx: AudioContext) {
+    if (!ctx.audioWorklet)
+      throw new Error(
+        "This browser does not support the audio processing Riffroom needs.",
+      );
+    if (!this.soundTouchRegistered) {
+      await SoundTouchNode.register(ctx, soundTouchProcessorUrl);
+      this.soundTouchRegistered = true;
+    }
+    if (this.soundTouch) return;
+    const node = new SoundTouchNode({ context: ctx, outputChannelCount: 2 });
+    node.setStretchParameters({
+      sequenceMs: 80,
+      seekWindowMs: 20,
+      overlapMs: 12,
+      quickSeek: false,
+    });
+    this.soundTouch = node;
+    this.updateSoundTouchParameters();
+    this.master!.connect(node).connect(this.limiter!);
+  }
+
+  private updateSoundTouchParameters() {
+    if (!this.soundTouch) return;
+    this.soundTouch.playbackRate.value = this.rate;
+    this.soundTouch.pitchSemitones.value = this.pitchSemitones;
+  }
+
+  private resetSoundTouch() {
+    if (!this.soundTouch) return;
+    this.master?.disconnect(this.soundTouch);
+    this.soundTouch.disconnect();
+    this.soundTouch = null;
   }
 
   async load(stems: Stem[], signal: AbortSignal) {
@@ -57,6 +100,7 @@ export class MixerEngine {
     const version = ++this.generation;
     this.buffers.clear();
     const ctx = this.init();
+    await this.initSoundTouch(ctx);
     const decoded = new Map<string, AudioBuffer>();
     // Decode sequentially to keep memory peaks bounded on 16 GB machines.
     for (const stem of stems) {
@@ -104,6 +148,9 @@ export class MixerEngine {
     await ctx.resume();
     if (intent !== this.playIntent || this.playing || !this.buffers.size)
       return;
+    await this.initSoundTouch(ctx);
+    if (intent !== this.playIntent || this.playing || !this.buffers.size)
+      return;
     if (this.offset >= this.duration) this.offset = 0;
     if (
       this.loop.enabled &&
@@ -138,6 +185,7 @@ export class MixerEngine {
     this.sources.clear();
     this.gains.forEach((g) => g.disconnect());
     this.gains.clear();
+    this.resetSoundTouch();
   }
   seek(position: number) {
     const resume = this.playing;
@@ -151,6 +199,10 @@ export class MixerEngine {
     this.rate = rate;
     if (resume) void this.play();
   }
+  setPitch(semitones: number) {
+    this.pitchSemitones = Math.max(-12, Math.min(12, semitones));
+    this.updateSoundTouchParameters();
+  }
   setLoop(loop: typeof this.loop) {
     const resume = this.playing;
     this.pause();
@@ -161,6 +213,11 @@ export class MixerEngine {
     this.generation++;
     this.pause();
     this.buffers.clear();
+    this.resetSoundTouch();
+    this.master?.disconnect();
+    this.master = null;
+    this.limiter?.disconnect();
+    this.limiter = null;
     void this.context?.close();
   }
 }

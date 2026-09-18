@@ -701,16 +701,32 @@ h1 em {
   align-items: center;
   gap: 9px;
 }
+.playback-adjustments {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
 .speed select {
   padding: 4px 6px;
   font-size: 10px;
   background: #242b26;
   border-color: #3b463a;
 }
-.speed-note {
+.pitch {
   font-size: 10px;
-  color: #c0ba89;
-  margin-top: 10px;
+  color: #859481;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pitch input {
+  width: 105px;
+}
+.pitch span {
+  min-width: 48px;
+  text-align: right;
+  color: #aab7a6;
+  font-variant-numeric: tabular-nums;
 }
 .text-button {
   display: flex;
@@ -1227,6 +1243,15 @@ h1 em {
   .speed {
     gap: 4px;
   }
+  .playback-adjustments {
+    gap: 8px;
+  }
+  .pitch {
+    gap: 4px;
+  }
+  .pitch input {
+    width: 75px;
+  }
   .run-select > span {
     display: none;
   }
@@ -1402,6 +1427,13 @@ h1 em {
     padding-inline: 3px;
   }
   .speed {
+    font-size: 9px;
+  }
+  .playback-adjustments {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+  .pitch {
     font-size: 9px;
   }
   .page-footer {

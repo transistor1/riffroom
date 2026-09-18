@@ -526,7 +526,8 @@ export default function App() {
                 <b>Space</b> plays or pauses. Arrow keys skip five seconds.
               </li>
               <li>
-                Slower playback also lowers pitch. Use 1× for original tuning.
+                Change speed without changing tuning, or use Pitch to transpose
+                playback by up to one octave.
               </li>
               <li>
                 Download any stem with its arrow button. Original audio and all

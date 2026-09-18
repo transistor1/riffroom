@@ -26,6 +26,11 @@ test("import, real separation, mixing, looping, model comparison and removal", a
   await expect(
     page.getByRole("button", { name: "Play", exact: true }),
   ).toBeEnabled();
+  await page.getByRole("slider", { name: "Pitch", exact: true }).fill("2");
+  await expect(
+    page.getByRole("slider", { name: "Pitch", exact: true }),
+  ).toHaveValue("2");
+  await page.getByRole("slider", { name: "Pitch", exact: true }).fill("0");
   await page.getByRole("button", { name: "Play guitar with the band" }).click();
   await expect(
     page.getByRole("button", { name: "Mute guitar" }),

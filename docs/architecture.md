@@ -12,7 +12,8 @@ FastAPI on 127.0.0.1:8765
                                 └── aligned float WAV stems + waveform peaks
 
 Browser Web Audio: shared AudioContext → one source/gain per stem
-                   → master gain → final compressor → speakers
+                   → master gain → shared SoundTouchJS AudioWorklet
+                   → final compressor → speakers
 ```
 
 ## Boundaries
@@ -25,7 +26,7 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 - `separator.py`: version-specific runtime adapter. Atomic downloads, project-local Demucs conversion cache, dedicated guitar profile, non-normalizing float WAV writer.
 - `demucs_cache.py`: strict restoration of native MLX parameter paths, correcting the pinned upstream cached-weight loading bug.
 - `worker.py`: isolated inference entry point and phase messages. Successful aligned outputs are published together; partial outputs never appear as finished runs.
-- `frontend/src/audio.ts`: audio scheduling independent of React. Shared start time, seek offsets and loop boundaries prevent HTML-audio-element drift. Gain changes use short ramps.
+- `frontend/src/audio.ts`: audio scheduling independent of React. Shared start time, seek offsets and loop boundaries prevent HTML-audio-element drift. Gain changes use short ramps. Source playback rate controls tempo; one shared post-mix SoundTouchJS AudioWorklet compensates the rate-induced pitch change and applies the independent user pitch offset. The worklet uses the default Lanczos interpolation with music-oriented WSOLA parameters and exhaustive seeking.
 - `frontend/src/components/Mixer.tsx`: transport, loop controls, channel state and per-result local storage.
 - `frontend/src/components/Waveform.tsx`: waveform rendering from backend peaks.
 - `frontend/src/App.tsx`: import, library, model selection and result selection.
@@ -40,7 +41,7 @@ A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The m
 
 - This is a single-process local application. Do not start multiple Uvicorn workers against one data folder. A future multi-user service would need database-backed jobs and authentication.
 - All selected stems are decoded into browser memory for sample-synchronized playback and gapless native looping. Very long tracks use significant RAM. Streaming or an AudioWorklet ring buffer is a future extension.
-- Speed currently uses Web Audio playbackRate, so it changes pitch. Pitch-preserving time stretch belongs in a shared multichannel AudioWorklet or a cached backend render path.
+- Speed uses Web Audio source playbackRate for sample-synchronized transport and mirrors that value to `@soundtouchjs/audio-worklet` 2.1.1, whose shared post-mix processor preserves tuning. The Pitch slider independently controls the processor's ±12-semitone offset. SoundTouchJS and its installed support packages are distributed under MPL-2.0.
 - Switching results remounts the audio engine and stops playback. Completing the first separation selects its result automatically.
 - Mix preferences are in localStorage, while the library is on disk. Cross-browser preference sync and named saved mixes are future work.
 - Manifests are simple JSON to keep the first version inspectable. SQLite can replace Store without changing the audio worker or mixer.

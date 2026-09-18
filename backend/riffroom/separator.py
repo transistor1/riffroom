@@ -28,22 +28,51 @@ class LocalSeparator(Separator):
             return
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(target.name + ".part")
-        try:
-            with requests.get(url, stream=True, timeout=(30, 120)) as response:
-                response.raise_for_status()
-                size = 0
-                with temporary.open("wb") as stream:
-                    for chunk in response.iter_content(chunk_size=1024 * 1024):
-                        stream.write(chunk)
-                        size += len(chunk)
-                expected = response.headers.get("Content-Length")
-                if expected and size != int(expected):
-                    raise ValueError("Model download was incomplete. Please retry.")
-                temporary.replace(target)
-        except requests.RequestException as exc:
-            raise RuntimeError(f"Could not download {target.name}: {exc}") from exc
-        finally:
+        last_error = None
+        for attempt in range(3):
             temporary.unlink(missing_ok=True)
+            try:
+                # Ask for identity encoding so Content-Length describes the bytes
+                # written to disk. Some hosts still compress anyway, so only use
+                # Content-Length as an integrity check when the response is
+                # actually unencoded.
+                with requests.get(
+                    url,
+                    stream=True,
+                    timeout=(30, 120),
+                    headers={"Accept-Encoding": "identity"},
+                ) as response:
+                    response.raise_for_status()
+                    size = 0
+                    with temporary.open("wb") as stream:
+                        for chunk in response.iter_content(chunk_size=1024 * 1024):
+                            if not chunk:
+                                continue
+                            stream.write(chunk)
+                            size += len(chunk)
+                    expected = response.headers.get("Content-Length")
+                    encoding = response.headers.get("Content-Encoding", "identity").lower()
+                    if expected and encoding in {"", "identity"} and size != int(expected):
+                        raise ValueError(
+                            f"Model download was incomplete ({size} of {expected} bytes)."
+                        )
+                    if size == 0:
+                        raise ValueError("Model download was empty.")
+                    temporary.replace(target)
+                    return
+            except (requests.RequestException, OSError, ValueError) as exc:
+                last_error = exc
+                temporary.unlink(missing_ok=True)
+                if attempt < 2:
+                    self.logger.warning(
+                        "Model download failed for %s (attempt %s/3): %s. Retrying.",
+                        target.name,
+                        attempt + 1,
+                        exc,
+                    )
+        raise RuntimeError(
+            f"Could not download {target.name} after 3 attempts: {last_error}"
+        ) from last_error
 
     def download_model_files(self, model_filename):
         if model_filename == "becruily_guitar.ckpt":

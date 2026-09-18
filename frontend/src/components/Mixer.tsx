@@ -90,6 +90,7 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
   const [position, setPosition] = useState(0);
   const [master, setMaster] = useState(0.8);
   const [rate, setRate] = useState(1);
+  const [pitch, setPitch] = useState(0);
   const [loop, setLoop] = useState({ a: 0, b: track.duration, enabled: false });
   useEffect(() => {
     const player = new MixerEngine();
@@ -304,30 +305,46 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
               <RotateCcw size={13} />
             </button>
           </div>
-          <label className="speed">
-            Speed{" "}
-            <select
-              value={rate}
-              onChange={(e) => {
-                const value = +e.target.value;
-                setRate(value);
-                engine.current?.setRate(value);
-              }}
-            >
-              {[0.5, 0.75, 0.9, 1, 1.1, 1.25].map((r) => (
-                <option key={r} value={r}>
-                  {r}×
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="playback-adjustments">
+            <label className="speed">
+              Speed{" "}
+              <select
+                value={rate}
+                onChange={(e) => {
+                  const value = +e.target.value;
+                  setRate(value);
+                  engine.current?.setRate(value);
+                }}
+              >
+                {[0.5, 0.75, 0.9, 1, 1.1, 1.25].map((r) => (
+                  <option key={r} value={r}>
+                    {r}×
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="pitch">
+              Pitch
+              <input
+                aria-label="Pitch"
+                type="range"
+                min="-12"
+                max="12"
+                step="0.1"
+                value={pitch}
+                onChange={(e) => {
+                  const value = +e.target.value;
+                  setPitch(value);
+                  engine.current?.setPitch(value);
+                }}
+              />
+              <span>
+                {pitch > 0 ? "+" : ""}
+                {pitch.toFixed(1)} st
+              </span>
+            </label>
+          </div>
         </div>
-        {rate !== 1 && (
-          <p className="speed-note">
-            Speed also changes pitch. Use 1× when playing along in the original
-            tuning.
-          </p>
-        )}
       </section>
       <div className="section-heading">
         <div>
