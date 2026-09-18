@@ -652,6 +652,7 @@ h1 em {
 }
 .practice-controls {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 10px;
@@ -717,16 +718,40 @@ h1 em {
   color: #859481;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
-.pitch input {
+.pitch-slider {
   width: 105px;
 }
-.pitch span {
-  min-width: 48px;
+.pitch-value {
+  width: 58px;
+  padding: 4px 5px;
   text-align: right;
+  background: #242b26;
+  border: 1px solid #3b463a;
+  border-radius: 5px;
   color: #aab7a6;
   font-variant-numeric: tabular-nums;
+}
+.pitch-unit {
+  margin-left: -3px;
+  color: #aab7a6;
+}
+.pitch-reset {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ba996;
+  background: transparent;
+  border: 1px solid #3a453b;
+  border-radius: 5px;
+}
+.pitch-reset:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: #718552;
 }
 .text-button {
   display: flex;
@@ -1249,7 +1274,7 @@ h1 em {
   .pitch {
     gap: 4px;
   }
-  .pitch input {
+  .pitch-slider {
     width: 75px;
   }
   .run-select > span {
@@ -1416,7 +1441,9 @@ h1 em {
     max-width: 225px;
   }
   .practice-controls {
-    gap: 3px;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
   }
   .small-button {
     padding: 6px 8px;
@@ -1430,8 +1457,8 @@ h1 em {
     font-size: 9px;
   }
   .playback-adjustments {
-    align-items: flex-end;
-    flex-direction: column;
+    flex-wrap: wrap;
+    justify-content: space-between;
   }
   .pitch {
     font-size: 9px;

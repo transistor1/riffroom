@@ -91,6 +91,7 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
   const [master, setMaster] = useState(0.8);
   const [rate, setRate] = useState(1);
   const [pitch, setPitch] = useState(0);
+  const [pitchInput, setPitchInput] = useState("0.0");
   const [loop, setLoop] = useState({ a: 0, b: track.duration, enabled: false });
   useEffect(() => {
     const player = new MixerEngine();
@@ -168,6 +169,21 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
   function updateLoop(next: typeof loop) {
     setLoop(next);
     engine.current?.setLoop(next);
+  }
+  function applyPitch(value: number) {
+    const next = Math.round(Math.max(-12, Math.min(12, value)) * 10) / 10;
+    setPitch(next);
+    setPitchInput(next.toFixed(1));
+    engine.current?.setPitch(next);
+  }
+  function commitPitchInput(value: string) {
+    if (!value.trim()) {
+      setPitchInput(pitch.toFixed(1));
+      return;
+    }
+    const next = Number(value);
+    if (Number.isFinite(next)) applyPitch(next);
+    else setPitchInput(pitch.toFixed(1));
   }
   const soloed = Object.values(mix).some((c) => c.solo);
   const withoutGuitar =
@@ -323,26 +339,48 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
                 ))}
               </select>
             </label>
-            <label className="pitch">
-              Pitch
+            <div className="pitch">
+              <span>Pitch</span>
               <input
+                className="pitch-slider"
                 aria-label="Pitch"
                 type="range"
                 min="-12"
                 max="12"
                 step="0.1"
                 value={pitch}
-                onChange={(e) => {
-                  const value = +e.target.value;
-                  setPitch(value);
-                  engine.current?.setPitch(value);
+                onChange={(e) => applyPitch(+e.target.value)}
+              />
+              <input
+                className="pitch-value"
+                aria-label="Exact pitch in semitones"
+                title="Exact pitch in semitones"
+                type="number"
+                inputMode="decimal"
+                min="-12"
+                max="12"
+                step="0.1"
+                value={pitchInput}
+                onChange={(e) => setPitchInput(e.target.value)}
+                onBlur={(e) => commitPitchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitPitchInput(e.currentTarget.value);
+                  }
                 }}
               />
-              <span>
-                {pitch > 0 ? "+" : ""}
-                {pitch.toFixed(1)} st
-              </span>
-            </label>
+              <span className="pitch-unit">st</span>
+              <button
+                className="pitch-reset"
+                aria-label="Reset pitch to zero"
+                title="Reset pitch to zero"
+                type="button"
+                onClick={() => applyPitch(0)}
+              >
+                <RotateCcw size={13} />
+              </button>
+            </div>
           </div>
         </div>
       </section>

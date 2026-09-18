@@ -30,7 +30,25 @@ test("import, real separation, mixing, looping, model comparison and removal", a
   await expect(
     page.getByRole("slider", { name: "Pitch", exact: true }),
   ).toHaveValue("2");
-  await page.getByRole("slider", { name: "Pitch", exact: true }).fill("0");
+  const exactPitch = page.getByRole("spinbutton", {
+    name: "Exact pitch in semitones",
+  });
+  await exactPitch.fill("99");
+  await exactPitch.press("Tab");
+  await expect(exactPitch).toHaveValue("12.0");
+  await expect(
+    page.getByRole("slider", { name: "Pitch", exact: true }),
+  ).toHaveValue("12");
+  await exactPitch.fill("-3.7");
+  await exactPitch.press("Enter");
+  await expect(
+    page.getByRole("slider", { name: "Pitch", exact: true }),
+  ).toHaveValue("-3.7");
+  await page.getByRole("button", { name: "Reset pitch to zero" }).click();
+  await expect(exactPitch).toHaveValue("0.0");
+  await expect(
+    page.getByRole("slider", { name: "Pitch", exact: true }),
+  ).toHaveValue("0");
   await page.getByRole("button", { name: "Play guitar with the band" }).click();
   await expect(
     page.getByRole("button", { name: "Mute guitar" }),
