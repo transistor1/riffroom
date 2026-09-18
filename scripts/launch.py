@@ -40,6 +40,10 @@ def main():
         print(f"Riffroom is already running at {URL}")
         return
     with socket.socket() as probe:
+        # Match the server's normal Unix socket behavior so a just-closed
+        # Riffroom instance can be restarted while old connections are still
+        # in TIME_WAIT. This does not let us bind over another live listener.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("127.0.0.1", 8765))
         except OSError:

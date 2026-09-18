@@ -24,7 +24,7 @@ It opens **http://127.0.0.1:8765**. Keep the Terminal window open; Control-C sto
 6. Try another model from the bottom of the track page. Each completed run remains available in **Listening to**, alongside the original.
 7. Use a stem's download arrow to save its WAV file.
 
-Mix levels, mutes, and solos are remembered per result in this browser. Track audio and all completed separation results persist on disk. Loop points, play position, speed, and master output currently reset when changing results. The speed control changes pitch as well as tempo; use 1× to practice in the original tuning.
+Mix levels, mutes, and solos are remembered per result in this browser. Track audio and all completed separation results persist on disk. Loop points, play position, speed, and master output currently reset when changing results. Speed changes tempo while preserving tuning, and the Pitch control transposes playback independently.
 
 ## Model choices
 
