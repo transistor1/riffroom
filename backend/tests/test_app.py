@@ -7,7 +7,7 @@ import soundfile as sf
 from fastapi.testclient import TestClient
 from riffroom.app import create_app
 from riffroom.audio import validate_stems
-from riffroom.models import current_platform_key
+from riffroom.models import MODELS, current_platform_key
 
 
 @pytest.fixture
@@ -65,6 +65,120 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         assert model["compatibility"]["label"].startswith(
             "Compatible" if expected_compatibility else "Unavailable"
         )
+        assert model["prepared"] is False
+        assert model["cache_bytes"] == 0
+        assert model["cache_label"] == "Downloads on first use"
+        assert model["cache_cleanup_supported"] is True
+
+
+def write_model_assets(root, model_id, byte=b"prepared"):
+    paths = []
+    for filename in MODELS[model_id].cache_files:
+        path = root / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(byte)
+        paths.append(path)
+    return paths
+
+
+def test_model_cache_state_and_safe_idempotent_cleanup(application):
+    app, client = application
+    cache = app.state.jobs.cache
+    target_assets = write_model_assets(cache, "demucs-6", b"target")
+    other_assets = write_model_assets(cache, "guitar-focus", b"other")
+    partial = target_assets[0].with_name(target_assets[0].name + ".part")
+    partial.write_bytes(b"partial")
+    shared_registry = cache / "download_checks.json"
+    shared_torch = cache / "torch" / "hub" / "checkpoints" / "5c90dfd2-34c22ccb.th"
+    shared_registry.write_bytes(b"shared")
+    shared_torch.parent.mkdir(parents=True)
+    shared_torch.write_bytes(b"shared torch cache")
+
+    models = {model["id"]: model for model in client.get("/api/models").json()}
+    assert models["demucs-6"]["prepared"] is True
+    assert models["demucs-6"]["cache_bytes"] == sum(
+        path.stat().st_size for path in [*target_assets, partial]
+    )
+    assert models["demucs-6"]["cache_label"] == "Prepared"
+    assert models["guitar-focus"]["prepared"] is True
+
+    track = upload(client)
+    run_id = uuid4().hex
+    add_runs(app, track["id"], [run_id], active_run=run_id)
+    original = app.state.store.directory(track["id"]) / "original.wav"
+    stem = app.state.store.directory(track["id"]) / "runs" / run_id / "guitar.wav"
+    original_bytes, stem_bytes = original.read_bytes(), stem.read_bytes()
+    app.state.store.update(
+        track["id"], status="queued", pending_model="demucs-6"
+    )
+
+    response = client.delete("/api/models/demucs-6/cache")
+    assert response.status_code == 409
+    assert "active separation" in response.json()["detail"]
+    assert all(path.is_file() for path in target_assets)
+
+    app.state.store.update(track["id"], status="ready", pending_model=None)
+    assert client.delete("/api/models/demucs-6/cache").status_code == 204
+    assert client.delete("/api/models/demucs-6/cache").status_code == 204
+
+    assert not any(path.exists() for path in [*target_assets, partial])
+    assert all(path.is_file() for path in other_assets)
+    assert shared_registry.read_bytes() == b"shared"
+    assert shared_torch.read_bytes() == b"shared torch cache"
+    assert original.read_bytes() == original_bytes
+    assert stem.read_bytes() == stem_bytes
+    models = {model["id"]: model for model in client.get("/api/models").json()}
+    assert models["demucs-6"]["prepared"] is False
+    assert models["demucs-6"]["cache_bytes"] == 0
+    assert models["guitar-focus"]["prepared"] is True
+
+
+@pytest.mark.parametrize("status", ["queued", "processing"])
+def test_model_cache_cleanup_rejects_each_active_status(application, status):
+    app, client = application
+    assets = write_model_assets(app.state.jobs.cache, "roformer-6")
+    track = upload(client)
+    app.state.store.update(track["id"], status=status, pending_model="roformer-6")
+
+    response = client.delete("/api/models/roformer-6/cache")
+
+    assert response.status_code == 409
+    assert all(path.is_file() for path in assets)
+
+
+def test_model_cache_does_not_follow_directory_symlink(application, tmp_path):
+    app, client = application
+    cache = app.state.jobs.cache
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    external_files = []
+    for filename in MODELS["demucs-6"].cache_files:
+        path = cache / filename
+        if path.parent.name == "demucs-mlx":
+            external = outside / path.name
+            external.write_bytes(b"outside")
+            external_files.append(external)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"inside")
+    (cache / "demucs-mlx").symlink_to(outside, target_is_directory=True)
+
+    model = next(item for item in client.get("/api/models").json() if item["id"] == "demucs-6")
+    assert model["prepared"] is False
+    assert model["cache_bytes"] == 2 * len(b"inside")
+    assert client.delete("/api/models/demucs-6/cache").status_code == 204
+
+    assert all(path.read_bytes() == b"outside" for path in external_files)
+    assert (cache / "demucs-mlx").is_symlink()
+
+
+def test_delete_unknown_model_cache_returns_404(application):
+    _, client = application
+
+    response = client.delete("/api/models/not-curated/cache")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Separation model not found."}
 
 
 def add_runs(app, track_id, run_ids, active_run=None):

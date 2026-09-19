@@ -17,9 +17,11 @@ source, catalog origin and checkpoint-terms status. The API compares those decla
 current-platform key such as `macos-arm64`, `windows-x86_64` or `linux-x86_64`; the model manager presents that
 result instead of making its own operating-system assumptions.
 
-This first phase is catalog and UI groundwork. All four profiles still use the existing
-`mlx-audio-separator` provider and support `macos-arm64`. The manager does not claim that weights are installed:
-curated weights download on first use, as before. Install/remove controls and cache state belong to a later phase.
+All four profiles use the existing `mlx-audio-separator` provider and support `macos-arm64`. The manager reports
+each profile as **Prepared** only when all of its declared Riffroom-owned files are present and non-empty;
+otherwise it reports **Downloads on first use**. Choosing **Use model** changes the current import/separation
+selection without starting work. First-use separation remains responsible for downloading and converting files;
+there is no separate install or preload job.
 
 The next provider is expected to be a validated portable adapter, likely based on `python-audio-separator`.
 Adding it must not make every checkpoint universally compatible: compatibility stays per model and provider,
@@ -41,6 +43,20 @@ No stereo-center subtraction, EQ split, or duplicated guitar output is presented
 ## Weight management
 
 Profiles are curated in `backend/riffroom/models.py`. The adapter in `separator.py` uses the upstream model registry for supported profiles and the author's published Hugging Face files for guitar focus. Atomic downloads prevent cancelled downloads from becoming valid cache hits. Model WAV outputs use float32 without independently normalizing each stem, preserving the model's relative output levels. A final playback compressor limits boosted sums; 100% faders are not guaranteed to reconstruct the original mix exactly because separation itself is approximate.
+
+Cache reporting and removal cover only exact model-specific files under Riffroom's configured `data/models`
+root. For the two Demucs profiles this means the profile YAML, its specifically named top-level `.th`
+checkpoints, and its `demucs-mlx/<profile>.safetensors` plus JSON conversion metadata. For BS-RoFormer SW it
+means `BS-Roformer-SW.ckpt` and `BS-Roformer-SW.yaml`; for guitar focus it means
+`becruily_guitar.ckpt` and `config_guitar_becruily.yaml`. Exact `.part` files left by an interrupted atomic
+download are also attributed to their model for size reporting and cleanup.
+
+**Remove prepared files** is safe and idempotent, and is unavailable while the selected model is queued or
+processing. It does not touch track originals, completed stem WAVs, manifests, the shared
+`download_checks.json` registry, or the `TORCH_HOME`/`data/models/torch` provider cache. Consequently the shown
+size is the model-specific Riffroom cache size, not every byte a provider may have downloaded. Removing Demucs
+files makes Riffroom prepare the MLX conversion again on next use, while shared upstream Torch checkpoint bytes
+may remain.
 
 Weights are not checked into this repository. Runtime and architecture source licenses are separate from checkpoint
 licenses; an open runtime does not make a checkpoint open. The catalog therefore reports checkpoint terms as

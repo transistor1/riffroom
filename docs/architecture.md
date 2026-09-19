@@ -24,8 +24,8 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 - `store.py`: atomic manifests; each track owns its inputs and run folders.
 - `jobs.py`: one inference job at a time; process-group cancellation; error and restart recovery.
 - `models.py`: provider-aware declarative catalog consumed by the UI. Profiles describe architecture,
-  runtime provider, supported platform capabilities, checkpoint terms and catalog origin. The API computes
-  compatibility for the current platform without changing inference dispatch.
+  runtime provider, supported platform capabilities, checkpoint terms, catalog origin and exact app-owned
+  cache files. The API computes compatibility and prepared-file state without changing inference dispatch.
 - `separator.py`: version-specific runtime adapter. Atomic downloads, project-local Demucs conversion cache, dedicated guitar profile, non-normalizing float WAV writer.
 - `demucs_cache.py`: strict restoration of native MLX parameter paths, correcting the pinned upstream cached-weight loading bug.
 - `worker.py`: isolated inference entry point and phase messages. Successful aligned outputs are published together; partial outputs never appear as finished runs.
@@ -43,9 +43,18 @@ aligned stereo 44.1 kHz float WAVs and the same stem manifest. Do not let raw us
 checkpoint files or executable code.
 
 Compatibility is capability-driven per profile and provider, not inferred from an architecture name or a UI
-operating-system check. Phase 1 keeps the existing `mlx-audio-separator` Apple Silicon execution path unchanged
-while exposing provider metadata. A later phase can add a portable provider, likely
-`python-audio-separator`, and cache lifecycle controls after its supported backends and profiles are validated.
+operating-system check. The current catalog keeps the existing `mlx-audio-separator` Apple Silicon execution
+path unchanged. A later phase can add a portable provider, likely `python-audio-separator`, after its supported
+backends and profiles are validated.
+
+Prepared-file state is intentionally narrower than total provider disk use. Each curated profile declares the
+exact checkpoint, config and/or converted MLX files that Riffroom owns beneath its configured `data/models`
+directory. A profile is Prepared only when every declared file is present and non-empty; otherwise it will
+prepare on next use. Cleanup unlinks only those declared filenames (and their exact atomic-download `.part`
+counterparts), never a request-supplied path. It does not touch track originals, run manifests, generated WAVs,
+the shared model registry, or provider-level caches such as `data/models/torch` / `TORCH_HOME`. In particular,
+removing Demucs prepared files may leave upstream Torch downloads on disk even though the next use converts the
+model again.
 
 A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The mixer accepts arbitrary names; add display labels/icons and choose how the guitar presets target the new names.
 
@@ -56,6 +65,7 @@ A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The m
 - Speed uses Web Audio source playbackRate for sample-synchronized transport and mirrors that value to `@soundtouchjs/audio-worklet` 2.1.1, whose shared post-mix processor preserves tuning. At 0.5×, SoundTouch's auto WSOLA heuristic lengthens its processing windows for the lower internal tempo; rates of 0.75× and above retain the existing fixed profile. The Pitch slider, exact-value field, and reset control independently set the processor's ±12-semitone offset. SoundTouchJS and its installed support packages are distributed under MPL-2.0.
 - Switching results remounts the audio engine and stops playback. Completing the first separation selects its result automatically.
 - Mix preferences are in localStorage, while the library is on disk. Individual completed separation results can be removed without touching the normalized original or other results; deleting the selected result also removes its saved mix preference. Cross-browser preference sync and named saved mixes are future work.
+- Model prepared-file cleanup is blocked while that model is queued or processing. It is idempotent and does not remove imported audio, track history or completed separation results.
 - Manifests are simple JSON to keep the first version inspectable. SQLite can replace Store without changing the audio worker or mixer.
 - Source audio is never modified. The imported copy is resampled to 44.1 kHz stereo to standardize model and browser alignment. Every stem must have exactly the same frame count before publication.
 - Progress reports phases, not fabricated percentages. More granular model callbacks can be added when the runtime provides a stable interface.

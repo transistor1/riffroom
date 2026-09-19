@@ -28,9 +28,23 @@ const json = (value: unknown): RequestInit => ({
 
 type DeleteTarget =
   | { kind: "track"; trackId: string }
-  | { kind: "run"; trackId: string; runId: string };
+  | { kind: "run"; trackId: string; runId: string }
+  | { kind: "model-cache"; modelId: string; modelName: string };
 
 type OpenModal = "help" | "models" | null;
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (const next of units.slice(1)) {
+    if (value < 1024) break;
+    value /= 1024;
+    unit = next;
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
+}
 
 export default function App() {
   const [models, setModels] = useState<Model[]>([]);
@@ -45,10 +59,15 @@ export default function App() {
   const [openModal, setOpenModal] = useState<OpenModal>(null);
   const [loading, setLoading] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [modelError, setModelError] = useState("");
+  const [removingModelId, setRemovingModelId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const track = tracks.find((t) => t.id === selectedId);
   const run = track?.runs.find((r) => r.id === (runId ?? track.active_run));
   const model = models.find((m) => m.id === modelId);
+  const refreshModels = useCallback(async () => {
+    setModels(await api<Model[]>("/models"));
+  }, []);
   const refresh = useCallback(async () => {
     try {
       const data = await api<Track[]>("/tracks");
@@ -65,13 +84,11 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
-    void api<Model[]>("/models")
-      .then(setModels)
-      .catch((e) => setError(e.message));
+    void refreshModels().catch((e) => setError(e.message));
     void refresh();
     const timer = setInterval(refresh, 2000);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, refreshModels]);
   useEffect(() => {
     if (!openModal && !deleteTarget) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -143,6 +160,21 @@ export default function App() {
       await refresh();
     } catch (e) {
       setError((e as Error).message);
+    }
+  }
+  async function removeModelCache(
+    target: Extract<DeleteTarget, { kind: "model-cache" }>,
+  ) {
+    setRemovingModelId(target.modelId);
+    setModelError("");
+    try {
+      await api(`/models/${target.modelId}/cache`, { method: "DELETE" });
+      await refreshModels();
+    } catch (e) {
+      setModelError((e as Error).message);
+    } finally {
+      setRemovingModelId(null);
+      setDeleteTarget(null);
     }
   }
   const showImport = importOpen || !track;
@@ -220,7 +252,13 @@ export default function App() {
           )}
         </nav>
         <div className="sidebar-bottom">
-          <button onClick={() => setOpenModal("models")}>
+          <button
+            onClick={() => {
+              setModelError("");
+              setOpenModal("models");
+              void refreshModels().catch((e) => setModelError(e.message));
+            }}
+          >
             <Boxes size={16} /> Model manager
           </button>
           <button onClick={() => setOpenModal("help")}>
@@ -518,7 +556,7 @@ export default function App() {
           <p>Separate with {model?.name}</p>
         </div>
       )}
-      {openModal === "models" && (
+      {openModal === "models" && deleteTarget?.kind !== "model-cache" && (
         <div className="modal-backdrop" onClick={() => setOpenModal(null)}>
           <section
             className="modal model-manager"
@@ -541,9 +579,20 @@ export default function App() {
               attached to their checkpoint weights.
             </p>
             <p className="model-download-note">
-              Curated model weights download on first use. Riffroom does not
-              track installation status yet.
+              Prepared files stay in Riffroom&apos;s local model cache. Removing
+              them means the model will prepare again on next use.
             </p>
+            {modelError && (
+              <div className="manager-error" role="alert">
+                {modelError}
+                <button
+                  aria-label="Dismiss model error"
+                  onClick={() => setModelError("")}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
             <div className="manager-models">
               {models.map((m) => (
                 <article className="manager-model" key={m.id}>
@@ -573,6 +622,17 @@ export default function App() {
                       <dt>Output stems</dt>
                       <dd className="stem-list">{m.stems.join(", ")}</dd>
                     </div>
+                    <div>
+                      <dt>Prepared files</dt>
+                      <dd className="cache-detail">
+                        <span className={m.prepared ? "prepared" : ""}>
+                          {m.cache_label}
+                        </span>
+                        {m.cache_bytes > 0 && (
+                          <span>{formatBytes(m.cache_bytes)}</span>
+                        )}
+                      </dd>
+                    </div>
                   </dl>
                   <div className="model-terms">
                     <span className={`terms-status ${m.terms_status}`}>
@@ -584,9 +644,39 @@ export default function App() {
                     </span>
                     <p>{m.license}</p>
                   </div>
-                  <a href={m.source} target="_blank" rel="noreferrer">
-                    Source for {m.name}
-                  </a>
+                  <div className="manager-model-actions">
+                    <a href={m.source} target="_blank" rel="noreferrer">
+                      Source for {m.name}
+                    </a>
+                    <div>
+                      {m.prepared && m.cache_cleanup_supported && (
+                        <button
+                          className="remove-cache-button"
+                          onClick={() =>
+                            setDeleteTarget({
+                              kind: "model-cache",
+                              modelId: m.id,
+                              modelName: m.name,
+                            })
+                          }
+                        >
+                          Remove prepared files
+                        </button>
+                      )}
+                      {m.compatibility.compatible && (
+                        <button
+                          className="small-button"
+                          aria-pressed={modelId === m.id}
+                          onClick={() => {
+                            setModelId(m.id);
+                            setOpenModal(null);
+                          }}
+                        >
+                          {modelId === m.id ? "Using model" : "Use model"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </article>
               ))}
             </div>
@@ -660,17 +750,27 @@ export default function App() {
             role="dialog"
             aria-modal="true"
             aria-label={
-              deleteTarget.kind === "run"
-                ? "Delete separation result confirmation"
-                : "Delete track confirmation"
+              deleteTarget.kind === "model-cache"
+                ? "Remove prepared model files confirmation"
+                : deleteTarget.kind === "run"
+                  ? "Delete separation result confirmation"
+                  : "Delete track confirmation"
             }
           >
             <h2>
-              {deleteTarget.kind === "run"
-                ? "Remove this separation result?"
-                : "Remove this track?"}
+              {deleteTarget.kind === "model-cache"
+                ? `Remove prepared files for ${deleteTarget.modelName}?`
+                : deleteTarget.kind === "run"
+                  ? "Remove this separation result?"
+                  : "Remove this track?"}
             </h2>
-            {deleteTarget.kind === "run" ? (
+            {deleteTarget.kind === "model-cache" ? (
+              <p>
+                This removes only this model&apos;s prepared files. Tracks and
+                separation results stay in your library. The model will prepare
+                again on next use.
+              </p>
+            ) : deleteTarget.kind === "run" ? (
               <p>
                 This removes only this generated set of stems. Your original
                 audio and other separation results will remain.
@@ -684,20 +784,34 @@ export default function App() {
             <div className="dialog-actions">
               <button
                 className="small-button"
+                disabled={
+                  deleteTarget.kind === "model-cache" &&
+                  removingModelId === deleteTarget.modelId
+                }
                 onClick={() => setDeleteTarget(null)}
               >
-                {deleteTarget.kind === "run" ? "Keep result" : "Keep track"}
+                {deleteTarget.kind === "model-cache"
+                  ? "Keep prepared files"
+                  : deleteTarget.kind === "run"
+                    ? "Keep result"
+                    : "Keep track"}
               </button>
               <button
                 className="danger-button"
                 disabled={
-                  deleteTarget.kind === "run" &&
-                  active(
-                    tracks.find((item) => item.id === deleteTarget.trackId),
-                  )
+                  (deleteTarget.kind === "model-cache" &&
+                    removingModelId === deleteTarget.modelId) ||
+                  (deleteTarget.kind === "run" &&
+                    active(
+                      tracks.find((item) => item.id === deleteTarget.trackId),
+                    ))
                 }
                 onClick={() => {
                   const target = deleteTarget;
+                  if (target.kind === "model-cache") {
+                    void removeModelCache(target);
+                    return;
+                  }
                   setDeleteTarget(null);
                   void action(async () => {
                     if (target.kind === "track") {
@@ -722,7 +836,13 @@ export default function App() {
                   });
                 }}
               >
-                {deleteTarget.kind === "run" ? "Remove result" : "Remove track"}
+                {deleteTarget.kind === "model-cache"
+                  ? removingModelId === deleteTarget.modelId
+                    ? "Removing…"
+                    : "Remove prepared files"
+                  : deleteTarget.kind === "run"
+                    ? "Remove result"
+                    : "Remove track"}
               </button>
             </div>
           </section>

@@ -29,6 +29,10 @@ export type Model = {
   terms_status: "open" | "non-commercial" | "unverified";
   curated: boolean;
   catalog_origin: string;
+  prepared: boolean;
+  cache_bytes: number;
+  cache_label: "Prepared" | "Downloads on first use";
+  cache_cleanup_supported: boolean;
   compatibility: {
     platform_key: string;
     platform_name: string;

@@ -1169,6 +1169,25 @@ h1 em {
   border-radius: 7px;
   background: #293026;
 }
+.manager-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid #8d4b40;
+  border-radius: 7px;
+  color: #ffd7ce;
+  background: #482c28;
+  font-size: 11px;
+}
+.manager-error button {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  color: inherit;
+}
 .manager-models {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1234,6 +1253,22 @@ h1 em {
 .stem-list {
   text-transform: capitalize;
 }
+.cache-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.cache-detail span:first-child {
+  color: #abb5a6;
+}
+.cache-detail span:first-child.prepared {
+  color: #cfe6a8;
+}
+.cache-detail span + span::before {
+  content: "·";
+  margin-right: 7px;
+  color: #68736b;
+}
 .model-terms {
   padding-top: 12px;
   border-top: 1px solid #323a35;
@@ -1260,13 +1295,39 @@ h1 em {
   color: #edb5a9;
   background: #4e302d;
 }
-.manager-model > a {
-  display: inline-block;
+.manager-model-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
   margin-top: 11px;
+}
+.manager-model-actions > a {
   color: var(--accent);
   font-size: 10px;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+.manager-model-actions > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+.manager-model-actions .small-button,
+.remove-cache-button {
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.remove-cache-button {
+  border: 1px solid #704a42;
+  color: #e7b5aa;
+}
+.manager-model-actions .small-button[aria-pressed="true"] {
+  color: #b5c5aa;
+  background: #3b4638;
 }
 .accent {
   color: var(--accent);

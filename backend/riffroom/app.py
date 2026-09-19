@@ -14,7 +14,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from riffroom.audio import decode, waveform
 from riffroom.jobs import ACTIVE, Jobs
-from riffroom.models import MODELS, catalog
+from riffroom.models import MODELS, catalog, clear_model_cache
 from riffroom.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -69,7 +69,24 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
 
     @app.get("/api/models")
     def models():
-        return catalog()
+        return catalog(jobs.cache)
+
+    @app.delete("/api/models/{model_id}/cache", status_code=204)
+    def delete_model_cache(model_id: str):
+        model = MODELS.get(model_id)
+        if model is None:
+            raise HTTPException(404, "Separation model not found.")
+        with store.lock:
+            in_use = any(
+                track.get("status") in ACTIVE and track.get("pending_model") == model_id
+                for track in store.list()
+            )
+            if in_use:
+                raise HTTPException(
+                    409,
+                    "Wait for this model's active separation to finish before removing prepared files.",
+                )
+            clear_model_cache(model, jobs.cache)
 
     @app.get("/api/tracks")
     def tracks():

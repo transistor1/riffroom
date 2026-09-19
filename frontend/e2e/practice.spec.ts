@@ -7,7 +7,13 @@ test("import, real separation, mixing, looping, model comparison and removal", a
 }) => {
   test.setTimeout(180_000);
   const errors: string[] = [];
+  const separationRequests: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/separate")) {
+      separationRequests.push(request.url());
+    }
+  });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Your song." })).toBeVisible();
   await page.getByRole("button", { name: "Model manager" }).click();
@@ -19,6 +25,9 @@ test("import, real separation, mixing, looping, model comparison and removal", a
     manager.getByText("Demucs", { exact: true }).first(),
   ).toBeVisible();
   await expect(manager.getByText(/Compatible · macOS/).first()).toBeVisible();
+  await expect(
+    manager.getByText(/^(Prepared|Downloads on first use)$/).first(),
+  ).toBeVisible();
   await expect(manager.getByText("Non-commercial terms")).toBeVisible();
   await expect(manager.getByText("Unverified terms")).toBeVisible();
   await expect(
@@ -27,8 +36,27 @@ test("import, real separation, mixing, looping, model comparison and removal", a
   await expect(
     manager.getByRole("link", { name: "Source for Demucs · 6 stems" }),
   ).toHaveAttribute("href", "https://github.com/facebookresearch/demucs");
-  await manager.getByRole("button", { name: "Close model manager" }).click();
+  const roformer = manager.locator(".manager-model").filter({
+    has: manager.getByRole("heading", {
+      name: "RoFormer · 6 stems",
+      exact: true,
+    }),
+  });
+  await roformer.getByRole("button", { name: "Use model" }).click();
   await expect(manager).toBeHidden();
+  await expect(
+    page.locator(".model-card.chosen").getByRole("heading", {
+      name: "RoFormer · 6 stems",
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(separationRequests).toEqual([]);
+  await page
+    .locator(".model-card")
+    .filter({
+      has: page.getByRole("heading", { name: "Demucs · 6 stems", exact: true }),
+    })
+    .click();
   await expect(
     page.getByRole("button", { name: /Guitar specialist/ }),
   ).toBeVisible();
