@@ -1,5 +1,6 @@
-"""Curated profiles. Add models here without changing the API or mixer."""
+"""Curated model metadata, kept separate from inference runtime behavior."""
 
+import platform
 from dataclasses import asdict, dataclass
 
 
@@ -13,6 +14,29 @@ class ModelProfile:
     badge: str
     license: str
     source: str
+    provider: str
+    architecture: str
+    supported_platforms: tuple[str, ...]
+    terms_status: str
+    curated: bool = True
+    catalog_origin: str = "Riffroom curated catalog"
+
+
+PLATFORM_NAMES = {
+    "macos-arm64": "macOS (Apple Silicon)",
+    "macos-x86_64": "macOS (Intel)",
+    "windows-arm64": "Windows (ARM64)",
+    "windows-x86_64": "Windows (x86-64)",
+    "linux-arm64": "Linux (ARM64)",
+    "linux-x86_64": "Linux (x86-64)",
+}
+
+
+def current_platform_key() -> str:
+    """Return a stable catalog key for the host operating system and CPU."""
+    system = {"darwin": "macos"}.get(platform.system().lower(), platform.system().lower())
+    machine = platform.machine().lower().replace("amd64", "x86_64").replace("aarch64", "arm64")
+    return f"{system}-{machine}"
 
 
 SIX_STEMS = ("guitar", "vocals", "drums", "bass", "piano", "other")
@@ -28,6 +52,10 @@ MODELS = {
             "Start here",
             "MIT",
             "https://github.com/facebookresearch/demucs",
+            "mlx-audio-separator",
+            "Demucs",
+            ("macos-arm64",),
+            "open",
         ),
         ModelProfile(
             "roformer-6",
@@ -38,6 +66,10 @@ MODELS = {
             "Compare quality",
             "Community weights; redistribution terms unverified",
             "https://github.com/ssmall256/mlx-audio-separator",
+            "mlx-audio-separator",
+            "RoFormer",
+            ("macos-arm64",),
+            "unverified",
         ),
         ModelProfile(
             "guitar-focus",
@@ -48,6 +80,10 @@ MODELS = {
             "Guitar specialist",
             "Author permits non-commercial use",
             "https://huggingface.co/becruily/mel-band-roformer-guitar",
+            "mlx-audio-separator",
+            "RoFormer",
+            ("macos-arm64",),
+            "non-commercial",
         ),
         ModelProfile(
             "demucs-ft",
@@ -58,10 +94,27 @@ MODELS = {
             "Drums & bass",
             "MIT",
             "https://github.com/facebookresearch/demucs",
+            "mlx-audio-separator",
+            "Demucs",
+            ("macos-arm64",),
+            "open",
         ),
     )
 }
 
 
 def catalog():
-    return [asdict(model) for model in MODELS.values()]
+    platform_key = current_platform_key()
+    platform_name = PLATFORM_NAMES.get(platform_key, platform_key)
+    result = []
+    for model in MODELS.values():
+        item = asdict(model)
+        compatible = platform_key in model.supported_platforms
+        item["compatibility"] = {
+            "platform_key": platform_key,
+            "platform_name": platform_name,
+            "compatible": compatible,
+            "label": f"{'Compatible' if compatible else 'Unavailable'} · {platform_name}",
+        }
+        result.append(item)
+    return result

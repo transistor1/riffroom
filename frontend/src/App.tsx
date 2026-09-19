@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   AudioLines,
+  Boxes,
   ChevronRight,
   CircleHelp,
   FolderOpen,
@@ -29,6 +30,8 @@ type DeleteTarget =
   | { kind: "track"; trackId: string }
   | { kind: "run"; trackId: string; runId: string };
 
+type OpenModal = "help" | "models" | null;
+
 export default function App() {
   const [models, setModels] = useState<Model[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -39,7 +42,7 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
-  const [help, setHelp] = useState(false);
+  const [openModal, setOpenModal] = useState<OpenModal>(null);
   const [loading, setLoading] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -70,7 +73,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, [refresh]);
   useEffect(() => {
-    if (!help && !deleteTarget) return;
+    if (!openModal && !deleteTarget) return;
     const previous = document.activeElement as HTMLElement | null;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
     const controls = () =>
@@ -82,7 +85,7 @@ export default function App() {
     controls()[0]?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setHelp(false);
+        setOpenModal(null);
         setDeleteTarget(null);
       }
       if (event.key === "Tab") {
@@ -103,7 +106,7 @@ export default function App() {
       document.removeEventListener("keydown", onKey);
       previous?.focus();
     };
-  }, [help, deleteTarget]);
+  }, [openModal, deleteTarget]);
   function selectTrack(t: Track) {
     setSelectedId(t.id);
     setRunId(null);
@@ -217,7 +220,10 @@ export default function App() {
           )}
         </nav>
         <div className="sidebar-bottom">
-          <button onClick={() => setHelp(true)}>
+          <button onClick={() => setOpenModal("models")}>
+            <Boxes size={16} /> Model manager
+          </button>
+          <button onClick={() => setOpenModal("help")}>
             <CircleHelp size={16} /> A little help
           </button>
           <div className="local-status">
@@ -312,7 +318,7 @@ export default function App() {
                       <h3>{m.name}</h3>
                       <p>{m.description}</p>
                       <span className="model-stems">
-                        {m.stems.length} stems · Apple Silicon
+                        {m.stems.length} stems · {m.compatibility.label}
                       </span>
                     </button>
                   ))}
@@ -512,8 +518,83 @@ export default function App() {
           <p>Separate with {model?.name}</p>
         </div>
       )}
-      {help && (
-        <div className="modal-backdrop" onClick={() => setHelp(false)}>
+      {openModal === "models" && (
+        <div className="modal-backdrop" onClick={() => setOpenModal(null)}>
+          <section
+            className="modal model-manager"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="model-manager-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="modal-close icon-button"
+              aria-label="Close model manager"
+              onClick={() => setOpenModal(null)}
+            >
+              <X size={20} />
+            </button>
+            <Boxes className="accent" size={29} />
+            <h2 id="model-manager-title">Model manager</h2>
+            <p>
+              Browse Riffroom&apos;s curated separation models and the terms
+              attached to their checkpoint weights.
+            </p>
+            <p className="model-download-note">
+              Curated model weights download on first use. Riffroom does not
+              track installation status yet.
+            </p>
+            <div className="manager-models">
+              {models.map((m) => (
+                <article className="manager-model" key={m.id}>
+                  <header>
+                    <div>
+                      <h3>{m.name}</h3>
+                      <span className="model-badge">{m.badge}</span>
+                    </div>
+                    <span
+                      className={`compatibility ${m.compatibility.compatible ? "compatible" : "unavailable"}`}
+                    >
+                      {m.compatibility.label}
+                    </span>
+                  </header>
+                  <dl>
+                    <div>
+                      <dt>Architecture</dt>
+                      <dd>{m.architecture}</dd>
+                    </div>
+                    <div>
+                      <dt>Provider / runtime</dt>
+                      <dd>
+                        <code>{m.provider}</code>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Output stems</dt>
+                      <dd className="stem-list">{m.stems.join(", ")}</dd>
+                    </div>
+                  </dl>
+                  <div className="model-terms">
+                    <span className={`terms-status ${m.terms_status}`}>
+                      {m.terms_status === "non-commercial"
+                        ? "Non-commercial terms"
+                        : m.terms_status === "unverified"
+                          ? "Unverified terms"
+                          : "Open terms"}
+                    </span>
+                    <p>{m.license}</p>
+                  </div>
+                  <a href={m.source} target="_blank" rel="noreferrer">
+                    Source for {m.name}
+                  </a>
+                </article>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
+      {openModal === "help" && (
+        <div className="modal-backdrop" onClick={() => setOpenModal(null)}>
           <section
             className="modal"
             role="dialog"
@@ -524,7 +605,7 @@ export default function App() {
             <button
               className="modal-close icon-button"
               aria-label="Close help"
-              onClick={() => setHelp(false)}
+              onClick={() => setOpenModal(null)}
             >
               <X size={20} />
             </button>
@@ -563,7 +644,10 @@ export default function App() {
               Local data lives in the project's data folder. Keep the Riffroom
               server running while separating and playing.
             </p>
-            <button className="primary-button" onClick={() => setHelp(false)}>
+            <button
+              className="primary-button"
+              onClick={() => setOpenModal(null)}
+            >
               Back to the room <ArrowLeft size={15} />
             </button>
           </section>

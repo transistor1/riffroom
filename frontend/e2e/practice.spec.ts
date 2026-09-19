@@ -10,6 +10,25 @@ test("import, real separation, mixing, looping, model comparison and removal", a
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Your song." })).toBeVisible();
+  await page.getByRole("button", { name: "Model manager" }).click();
+  const manager = page.getByRole("dialog", { name: "Model manager" });
+  await expect(manager).toBeVisible();
+  await expect(manager.locator(".manager-model")).toHaveCount(4);
+  await expect(manager.getByText("mlx-audio-separator").first()).toBeVisible();
+  await expect(
+    manager.getByText("Demucs", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(manager.getByText(/Compatible · macOS/).first()).toBeVisible();
+  await expect(manager.getByText("Non-commercial terms")).toBeVisible();
+  await expect(manager.getByText("Unverified terms")).toBeVisible();
+  await expect(
+    manager.getByText("Community weights; redistribution terms unverified"),
+  ).toBeVisible();
+  await expect(
+    manager.getByRole("link", { name: "Source for Demucs · 6 stems" }),
+  ).toHaveAttribute("href", "https://github.com/facebookresearch/demucs");
+  await manager.getByRole("button", { name: "Close model manager" }).click();
+  await expect(manager).toBeHidden();
   await expect(
     page.getByRole("button", { name: /Guitar specialist/ }),
   ).toBeVisible();

@@ -8,7 +8,8 @@ FastAPI on 127.0.0.1:8765
         ├── atomic JSON project store
         └── one-at-a-time job queue
                 └── cancellable Python subprocess
-                        └── curated model profile → MLX inference
+                        └── curated model profile → provider/runtime
+                                └── current MLX inference
                                 └── aligned float WAV stems + waveform peaks
 
 Browser Web Audio: shared AudioContext → one source/gain per stem
@@ -22,7 +23,9 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 - `audio.py`: FFmpeg format conversion, metadata limits, waveforms, alignment validation.
 - `store.py`: atomic manifests; each track owns its inputs and run folders.
 - `jobs.py`: one inference job at a time; process-group cancellation; error and restart recovery.
-- `models.py`: declarative profile catalog consumed by the UI.
+- `models.py`: provider-aware declarative catalog consumed by the UI. Profiles describe architecture,
+  runtime provider, supported platform capabilities, checkpoint terms and catalog origin. The API computes
+  compatibility for the current platform without changing inference dispatch.
 - `separator.py`: version-specific runtime adapter. Atomic downloads, project-local Demucs conversion cache, dedicated guitar profile, non-normalizing float WAV writer.
 - `demucs_cache.py`: strict restoration of native MLX parameter paths, correcting the pinned upstream cached-weight loading bug.
 - `worker.py`: isolated inference entry point and phase messages. Successful aligned outputs are published together; partial outputs never appear as finished runs.
@@ -33,7 +36,16 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 
 ## Adding a model
 
-Add a profile with a unique id, checkpoint filename, expected stem names, source and licensing note. For a checkpoint in the upstream registry, the adapter handles the rest. For another architecture, implement a new adapter that writes aligned stereo 44.1 kHz float WAVs and the same stem manifest. Do not let raw user input select arbitrary checkpoint files or executable code.
+Add a profile with a unique id, checkpoint filename, expected stem names, source, checkpoint terms,
+architecture, provider and explicit platform capabilities. For a checkpoint in the current upstream registry,
+the MLX adapter handles the rest. For another architecture or provider, implement a reviewed adapter that writes
+aligned stereo 44.1 kHz float WAVs and the same stem manifest. Do not let raw user input select arbitrary
+checkpoint files or executable code.
+
+Compatibility is capability-driven per profile and provider, not inferred from an architecture name or a UI
+operating-system check. Phase 1 keeps the existing `mlx-audio-separator` Apple Silicon execution path unchanged
+while exposing provider metadata. A later phase can add a portable provider, likely
+`python-audio-separator`, and cache lifecycle controls after its supported backends and profiles are validated.
 
 A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The mixer accepts arbitrary names; add display labels/icons and choose how the guitar presets target the new names.
 

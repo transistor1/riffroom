@@ -7,6 +7,7 @@ import soundfile as sf
 from fastapi.testclient import TestClient
 from riffroom.app import create_app
 from riffroom.audio import validate_stems
+from riffroom.models import current_platform_key
 
 
 @pytest.fixture
@@ -30,6 +31,40 @@ def upload(client):
     response = client.post("/api/tracks", files={"file": ("../guitar.wav", wav_bytes(), "audio/wav")})
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def test_model_catalog_exposes_provider_terms_and_compatibility(application):
+    _, client = application
+
+    response = client.get("/api/models")
+
+    assert response.status_code == 200
+    models = response.json()
+    assert [model["id"] for model in models] == [
+        "demucs-6",
+        "roformer-6",
+        "guitar-focus",
+        "demucs-ft",
+    ]
+    assert {model["provider"] for model in models} == {"mlx-audio-separator"}
+    assert {model["architecture"] for model in models} == {"Demucs", "RoFormer"}
+    assert {model["terms_status"] for model in models} == {
+        "open",
+        "non-commercial",
+        "unverified",
+    }
+    for model in models:
+        assert model["supported_platforms"] == ["macos-arm64"]
+        assert model["curated"] is True
+        assert model["catalog_origin"] == "Riffroom curated catalog"
+        platform_key = current_platform_key()
+        expected_compatibility = platform_key in model["supported_platforms"]
+        assert model["compatibility"]["platform_key"] == platform_key
+        assert model["compatibility"]["platform_name"]
+        assert model["compatibility"]["compatible"] is expected_compatibility
+        assert model["compatibility"]["label"].startswith(
+            "Compatible" if expected_compatibility else "Unavailable"
+        )
 
 
 def add_runs(app, track_id, run_ids, active_run=None):
