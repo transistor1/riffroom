@@ -1,9 +1,14 @@
-"""Curated model metadata, kept separate from inference runtime behavior."""
+"""Trusted model metadata, kept separate from inference runtime behavior."""
 
+import hashlib
+import json
 import platform
+import re
 import stat
 from dataclasses import asdict, dataclass
+from importlib import resources
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,8 @@ class ModelProfile:
     cache_files: tuple[str, ...]
     curated: bool = True
     catalog_origin: str = "Riffroom curated catalog"
+    catalog_group: str = "curated"
+    cache_cleanup_supported: bool = True
 
 
 PLATFORM_NAMES = {
@@ -43,7 +50,7 @@ def current_platform_key() -> str:
 
 
 SIX_STEMS = ("guitar", "vocals", "drums", "bass", "piano", "other")
-MODELS = {
+CURATED_MODELS = {
     model.id: model
     for model in (
         ModelProfile(
@@ -122,6 +129,173 @@ MODELS = {
     )
 }
 
+COMMUNITY_ORIGIN = "mlx-audio-separator 0.1.7 bundled models.json + models-scores.json"
+RUNTIME_SOURCE = "https://github.com/ssmall256/mlx-audio-separator"
+COMMUNITY_ARCHITECTURES = {
+    "vr_download_list": "VR",
+    "mdx_download_list": "MDX",
+    "mdx23c_download_list": "MDXC",
+    "roformer_download_list": "RoFormer",
+}
+COMMUNITY_CHECKPOINT_SUFFIXES = {
+    "vr_download_list": {".pth"},
+    "mdx_download_list": {".onnx"},
+    "mdx23c_download_list": {".ckpt"},
+    "roformer_download_list": {".ckpt"},
+}
+SAFE_STEM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]*$")
+
+
+def community_model_id(filename: str) -> str:
+    """Derive a stable ID without exposing a filename as a client-selectable ID."""
+    digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()
+    return f"community-{digest}"
+
+
+def _trusted_filename(value: Any, suffixes: set[str]) -> str | None:
+    """Accept only registry-owned basenames, never URLs or filesystem paths."""
+    if not isinstance(value, str) or not value or "\\" in value or ":" in value:
+        return None
+    relative = PurePosixPath(value)
+    if (
+        relative.name != value
+        or relative.is_absolute()
+        or value in {".", ".."}
+        or relative.suffix.lower() not in suffixes
+    ):
+        return None
+    return value
+
+
+def community_profiles_from_metadata(
+    model_registry: dict[str, Any], model_scores: dict[str, Any]
+) -> tuple[ModelProfile, ...]:
+    """Build runnable profiles only where bundled metadata explicitly declares stems."""
+    candidates: list[dict[str, Any]] = []
+    cache_owners: dict[str, int] = {}
+    for group, architecture in COMMUNITY_ARCHITECTURES.items():
+        entries = model_registry.get(group, {})
+        if not isinstance(entries, dict):
+            continue
+        for friendly_name, registry_value in entries.items():
+            if not isinstance(friendly_name, str) or not friendly_name:
+                continue
+            if isinstance(registry_value, str):
+                filename = _trusted_filename(registry_value, COMMUNITY_CHECKPOINT_SUFFIXES[group])
+                cache_files = (filename,) if filename else ()
+            elif isinstance(registry_value, dict) and len(registry_value) == 1:
+                raw_filename, raw_config = next(iter(registry_value.items()))
+                filename = _trusted_filename(raw_filename, COMMUNITY_CHECKPOINT_SUFFIXES[group])
+                config = _trusted_filename(raw_config, {".yaml", ".yml"})
+                cache_files = (filename, config) if filename and config else ()
+            else:
+                continue
+            if filename is None or not cache_files:
+                continue
+            for cache_file in cache_files:
+                cache_owners[cache_file] = cache_owners.get(cache_file, 0) + 1
+            score_entry = model_scores.get(filename, {})
+            raw_stems = score_entry.get("stems") if isinstance(score_entry, dict) else None
+            if not isinstance(raw_stems, list) or not raw_stems:
+                continue
+            if not all(
+                isinstance(stem, str) and SAFE_STEM_NAME.fullmatch(stem.strip())
+                for stem in raw_stems
+            ):
+                continue
+            candidates.append(
+                {
+                    "name": friendly_name,
+                    "filename": filename,
+                    "stems": tuple(stem.strip() for stem in raw_stems),
+                    "architecture": architecture,
+                    "cache_files": cache_files,
+                }
+            )
+
+    # One trusted checkpoint gets one ID even if a future registry repeats it under another heading.
+    unique: dict[str, dict[str, Any]] = {}
+    for candidate in sorted(
+        candidates,
+        key=lambda item: (
+            item["name"].casefold(),
+            item["filename"].casefold(),
+            item["architecture"],
+        ),
+    ):
+        unique.setdefault(candidate["filename"], candidate)
+
+    profiles = []
+    for candidate in unique.values():
+        cache_files = candidate["cache_files"]
+        profiles.append(
+            ModelProfile(
+                id=community_model_id(candidate["filename"]),
+                name=candidate["name"],
+                filename=candidate["filename"],
+                stems=candidate["stems"],
+                description=(
+                    "A trusted community checkpoint exposed by the pinned local runtime. "
+                    "Review its results and checkpoint terms before relying on it."
+                ),
+                badge="Community",
+                license="Checkpoint terms unverified; the runtime code license does not cover these weights.",
+                source=RUNTIME_SOURCE,
+                provider="mlx-audio-separator",
+                architecture=candidate["architecture"],
+                supported_platforms=("macos-arm64",),
+                terms_status="unverified",
+                cache_files=cache_files,
+                curated=False,
+                catalog_origin=COMMUNITY_ORIGIN,
+                catalog_group="community",
+                cache_cleanup_supported=all(cache_owners[item] == 1 for item in cache_files),
+            )
+        )
+    return tuple(profiles)
+
+
+def _load_bundled_community_metadata() -> tuple[dict[str, Any], dict[str, Any]]:
+    package = resources.files("mlx_audio_separator")
+    try:
+        registry = json.loads(package.joinpath("models.json").read_text(encoding="utf-8"))
+        scores = json.loads(package.joinpath("models-scores.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, TypeError):
+        return {}, {}
+    return registry, scores
+
+
+_COMMUNITY_REGISTRY, _COMMUNITY_SCORES = _load_bundled_community_metadata()
+COMMUNITY_MODELS = {
+    profile.id: profile
+    for profile in community_profiles_from_metadata(_COMMUNITY_REGISTRY, _COMMUNITY_SCORES)
+    if profile.id not in CURATED_MODELS
+}
+MODELS = {**CURATED_MODELS, **COMMUNITY_MODELS}
+
+
+def filter_models(
+    *, catalog_group: str | None = None, architecture: str | None = None, query: str = ""
+) -> tuple[ModelProfile, ...]:
+    """Return the catalog in stable UI order with optional catalog filters."""
+    community = sorted(
+        COMMUNITY_MODELS.values(), key=lambda model: (model.name.casefold(), model.filename.casefold())
+    )
+    ordered = (*CURATED_MODELS.values(), *community)
+    needle = query.casefold().strip()
+    return tuple(
+        model
+        for model in ordered
+        if (catalog_group is None or model.catalog_group == catalog_group)
+        and (architecture is None or model.architecture == architecture)
+        and (
+            not needle
+            or needle in model.name.casefold()
+            or needle in model.filename.casefold()
+            or any(needle in stem.casefold() for stem in model.stems)
+        )
+    )
+
 
 def _cache_paths(model: ModelProfile, cache_root: Path) -> tuple[Path, ...]:
     """Resolve only trusted, profile-owned paths below the configured model root."""
@@ -165,12 +339,14 @@ def model_cache_state(model: ModelProfile, cache_root: Path) -> dict:
         "prepared": prepared,
         "cache_bytes": sum(sizes),
         "cache_label": "Prepared" if prepared else "Downloads on first use",
-        "cache_cleanup_supported": True,
+        "cache_cleanup_supported": model.cache_cleanup_supported,
     }
 
 
 def clear_model_cache(model: ModelProfile, cache_root: Path) -> None:
     """Delete only the model's declared files and their atomic-download remnants."""
+    if not model.cache_cleanup_supported:
+        raise ValueError(f"Cache cleanup is unavailable for {model.id} because it uses shared files.")
     paths = _cache_paths(model, cache_root)
     for path in (*paths, *(item.with_name(item.name + ".part") for item in paths)):
         if not _inside_cache_root(path, cache_root):
@@ -187,9 +363,10 @@ def catalog(cache_root: Path):
     platform_key = current_platform_key()
     platform_name = PLATFORM_NAMES.get(platform_key, platform_key)
     result = []
-    for model in MODELS.values():
+    for model in filter_models():
         item = asdict(model)
         item.pop("cache_files")
+        item.pop("cache_cleanup_supported")
         compatible = platform_key in model.supported_platforms
         item["compatibility"] = {
             "platform_key": platform_key,

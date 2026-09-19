@@ -465,6 +465,32 @@ h1 em {
   color: #7c897c;
   margin-top: auto;
 }
+.community-selection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 11px 13px;
+  border: 1px solid #485342;
+  border-radius: 8px;
+  background: #222a23;
+}
+.community-selection strong,
+.community-selection span {
+  display: block;
+}
+.community-selection strong {
+  color: var(--accent);
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.community-selection span {
+  margin-top: 3px;
+  color: #bdc7ba;
+  font-size: 11px;
+}
 .welcome-footer {
   display: flex;
   align-items: center;
@@ -1188,6 +1214,56 @@ h1 em {
   place-items: center;
   color: inherit;
 }
+.catalog-controls {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) minmax(145px, auto);
+  align-items: end;
+  gap: 10px;
+  margin-top: 17px;
+}
+.catalog-groups {
+  display: flex;
+  gap: 5px;
+}
+.catalog-groups button {
+  padding: 8px 10px;
+  border: 1px solid #3c463e;
+  border-radius: 5px;
+  background: #202622;
+  color: #aab4a7;
+  font-size: 10px;
+}
+.catalog-controls label > span {
+  display: block;
+  margin-bottom: 4px;
+  color: #89958c;
+  font-size: 9px;
+}
+.catalog-controls input,
+.catalog-controls select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid #3b4243;
+  border-radius: 7px;
+  background: #22272a;
+  color: #e5e8e1;
+  font-size: 10px;
+}
+.catalog-controls input {
+  padding: 8px 10px;
+}
+.catalog-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 17px;
+  color: #869188;
+  font-size: 10px;
+}
+.catalog-summary strong {
+  color: #bdc9b9;
+  font-weight: 600;
+}
 .manager-models {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1199,6 +1275,13 @@ h1 em {
   border: 1px solid #3a443d;
   border-radius: 9px;
   background: #1c2220;
+}
+.manager-model.curated-model {
+  border-color: #4b5842;
+  background: #202720;
+}
+.manager-model.community-model {
+  border-color: #3a4144;
 }
 .manager-model header {
   display: flex;
@@ -1328,6 +1411,13 @@ h1 em {
 .manager-model-actions .small-button[aria-pressed="true"] {
   color: #b5c5aa;
   background: #3b4638;
+}
+.catalog-empty {
+  grid-column: 1 / -1;
+  padding: 24px;
+  border: 1px dashed #465047;
+  border-radius: 8px;
+  text-align: center;
 }
 .accent {
   color: var(--accent);
@@ -1575,6 +1665,12 @@ h1 em {
   }
   .modal.model-manager {
     padding: 25px 18px;
+  }
+  .catalog-controls {
+    grid-template-columns: 1fr;
+  }
+  .catalog-groups button {
+    flex: 1;
   }
   .manager-models {
     grid-template-columns: 1fr;

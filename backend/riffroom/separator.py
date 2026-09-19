@@ -10,9 +10,15 @@ from pathlib import Path
 import requests
 from mlx_audio_separator import Separator
 
+from riffroom.models import MODELS
+
+TRUSTED_MODEL_FILENAMES = frozenset(profile.filename for profile in MODELS.values())
+
 
 class LocalSeparator(Separator):
     def load_model(self, model_filename="model_bs_roformer_ep_317_sdr_12.9755.ckpt"):
+        if model_filename not in TRUSTED_MODEL_FILENAMES:
+            raise ValueError("Model filename is not in Riffroom's trusted catalog.")
         super().load_model(model_filename)
         if self.model_type == "Demucs":
             from riffroom.demucs_cache import restore_cached_demucs_weights

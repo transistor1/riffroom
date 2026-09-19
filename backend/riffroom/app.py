@@ -76,6 +76,8 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
         model = MODELS.get(model_id)
         if model is None:
             raise HTTPException(404, "Separation model not found.")
+        if not model.cache_cleanup_supported:
+            raise HTTPException(409, "Prepared-file cleanup is unavailable for this shared model config.")
         with store.lock:
             in_use = any(
                 track.get("status") in ACTIVE and track.get("pending_model") == model_id

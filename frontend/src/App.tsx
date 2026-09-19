@@ -61,10 +61,35 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [modelError, setModelError] = useState("");
   const [removingModelId, setRemovingModelId] = useState<string | null>(null);
+  const [modelGroup, setModelGroup] = useState<"curated" | "community">(
+    "curated",
+  );
+  const [modelSearch, setModelSearch] = useState("");
+  const [architectureFilter, setArchitectureFilter] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const track = tracks.find((t) => t.id === selectedId);
   const run = track?.runs.find((r) => r.id === (runId ?? track.active_run));
   const model = models.find((m) => m.id === modelId);
+  const curatedModels = models.filter((item) => item.curated);
+  const managerArchitectures = Array.from(
+    new Set(
+      models
+        .filter((item) => item.catalog_group === modelGroup)
+        .map((item) => item.architecture),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
+  const searchNeedle = modelSearch.trim().toLocaleLowerCase();
+  const managerModels = models.filter(
+    (item) =>
+      item.catalog_group === modelGroup &&
+      (!architectureFilter || item.architecture === architectureFilter) &&
+      (!searchNeedle ||
+        item.name.toLocaleLowerCase().includes(searchNeedle) ||
+        item.filename.toLocaleLowerCase().includes(searchNeedle) ||
+        item.stems.some((stem) =>
+          stem.toLocaleLowerCase().includes(searchNeedle),
+        )),
+  );
   const refreshModels = useCallback(async () => {
     setModels(await api<Model[]>("/models"));
   }, []);
@@ -341,7 +366,7 @@ export default function App() {
                   <Layers size={19} />
                 </div>
                 <div className="model-cards">
-                  {models.map((m) => (
+                  {curatedModels.map((m) => (
                     <button
                       className={`model-card ${modelId === m.id ? "chosen" : ""}`}
                       key={m.id}
@@ -361,6 +386,20 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+                {model && !model.curated && (
+                  <div className="community-selection" role="status">
+                    <div>
+                      <strong>Selected from Model Manager</strong>
+                      <span>{model.name}</span>
+                    </div>
+                    <button
+                      className="text-button"
+                      onClick={() => setOpenModal("models")}
+                    >
+                      Browse catalog
+                    </button>
+                  </div>
+                )}
               </section>
               <div className="welcome-footer">
                 <Headphones size={17} />
@@ -575,8 +614,8 @@ export default function App() {
             <Boxes className="accent" size={29} />
             <h2 id="model-manager-title">Model manager</h2>
             <p>
-              Browse Riffroom&apos;s curated separation models and the terms
-              attached to their checkpoint weights.
+              Start with Riffroom&apos;s recommended models, or explore
+              community checkpoints listed by the pinned local runtime.
             </p>
             <p className="model-download-note">
               Prepared files stay in Riffroom&apos;s local model cache. Removing
@@ -593,9 +632,74 @@ export default function App() {
                 </button>
               </div>
             )}
+            <div className="catalog-controls">
+              <div className="catalog-groups" aria-label="Catalog group">
+                <button
+                  className={modelGroup === "curated" ? "selected" : ""}
+                  aria-pressed={modelGroup === "curated"}
+                  onClick={() => {
+                    setModelGroup("curated");
+                    setArchitectureFilter("");
+                  }}
+                >
+                  Curated
+                </button>
+                <button
+                  className={modelGroup === "community" ? "selected" : ""}
+                  aria-pressed={modelGroup === "community"}
+                  onClick={() => {
+                    setModelGroup("community");
+                    setArchitectureFilter("");
+                  }}
+                >
+                  Community
+                </button>
+              </div>
+              <label>
+                <span>Search models</span>
+                <input
+                  type="search"
+                  aria-label="Search models"
+                  placeholder="Name, filename, or stem"
+                  value={modelSearch}
+                  onChange={(event) => setModelSearch(event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Architecture</span>
+                <select
+                  aria-label="Architecture filter"
+                  value={architectureFilter}
+                  onChange={(event) =>
+                    setArchitectureFilter(event.target.value)
+                  }
+                >
+                  <option value="">All architectures</option>
+                  {managerArchitectures.map((architecture) => (
+                    <option key={architecture} value={architecture}>
+                      {architecture}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="catalog-summary">
+              <strong>
+                {modelGroup === "curated"
+                  ? "Curated · recommended"
+                  : "Community · trusted registry"}
+              </strong>
+              <span>
+                {managerModels.length} model
+                {managerModels.length === 1 ? "" : "s"}
+              </span>
+            </div>
             <div className="manager-models">
-              {models.map((m) => (
-                <article className="manager-model" key={m.id}>
+              {managerModels.map((m) => (
+                <article
+                  className={`manager-model ${m.curated ? "curated-model" : "community-model"}`}
+                  key={m.id}
+                >
                   <header>
                     <div>
                       <h3>{m.name}</h3>
@@ -619,6 +723,10 @@ export default function App() {
                       </dd>
                     </div>
                     <div>
+                      <dt>Catalog</dt>
+                      <dd>{m.curated ? "Curated" : "Community"}</dd>
+                    </div>
+                    <div>
                       <dt>Output stems</dt>
                       <dd className="stem-list">{m.stems.join(", ")}</dd>
                     </div>
@@ -639,7 +747,7 @@ export default function App() {
                       {m.terms_status === "non-commercial"
                         ? "Non-commercial terms"
                         : m.terms_status === "unverified"
-                          ? "Unverified terms"
+                          ? "Checkpoint terms unverified"
                           : "Open terms"}
                     </span>
                     <p>{m.license}</p>
@@ -679,6 +787,11 @@ export default function App() {
                   </div>
                 </article>
               ))}
+              {!managerModels.length && (
+                <p className="catalog-empty">
+                  No models match this search and architecture.
+                </p>
+              )}
             </div>
           </section>
         </div>

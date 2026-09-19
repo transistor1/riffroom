@@ -29,13 +29,33 @@ test("import, real separation, mixing, looping, model comparison and removal", a
     manager.getByText(/^(Prepared|Downloads on first use)$/).first(),
   ).toBeVisible();
   await expect(manager.getByText("Non-commercial terms")).toBeVisible();
-  await expect(manager.getByText("Unverified terms")).toBeVisible();
+  await expect(
+    manager.getByText("Checkpoint terms unverified", { exact: true }),
+  ).toBeVisible();
   await expect(
     manager.getByText("Community weights; redistribution terms unverified"),
   ).toBeVisible();
   await expect(
     manager.getByRole("link", { name: "Source for Demucs · 6 stems" }),
   ).toHaveAttribute("href", "https://github.com/facebookresearch/demucs");
+  await manager.getByRole("button", { name: "Community" }).click();
+  await manager.getByLabel("Architecture filter").selectOption("MDXC");
+  await manager.getByLabel("Search models").fill("DrumSep");
+  await expect(manager.locator(".manager-model")).toHaveCount(1);
+  const community = manager.locator(".manager-model").filter({
+    has: manager.getByRole("heading", { name: /DrumSep/ }),
+  });
+  await expect(
+    community.getByText("Checkpoint terms unverified", { exact: true }),
+  ).toBeVisible();
+  await community.getByRole("button", { name: "Use model" }).click();
+  await expect(manager).toBeHidden();
+  await expect(page.getByText("Selected from Model Manager")).toBeVisible();
+  await expect(page.locator(".model-card")).toHaveCount(4);
+  expect(separationRequests).toEqual([]);
+  await page.getByRole("button", { name: "Model manager" }).click();
+  await manager.getByLabel("Search models").fill("");
+  await manager.getByRole("button", { name: "Curated" }).click();
   const roformer = manager.locator(".manager-model").filter({
     has: manager.getByRole("heading", {
       name: "RoFormer · 6 stems",

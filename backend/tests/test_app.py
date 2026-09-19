@@ -7,7 +7,15 @@ import soundfile as sf
 from fastapi.testclient import TestClient
 from riffroom.app import create_app
 from riffroom.audio import validate_stems
-from riffroom.models import MODELS, current_platform_key
+from riffroom.models import (
+    COMMUNITY_MODELS,
+    CURATED_MODELS,
+    MODELS,
+    community_model_id,
+    community_profiles_from_metadata,
+    current_platform_key,
+    filter_models,
+)
 
 
 @pytest.fixture
@@ -40,14 +48,15 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
 
     assert response.status_code == 200
     models = response.json()
-    assert [model["id"] for model in models] == [
+    assert [model["id"] for model in models[:4]] == [
         "demucs-6",
         "roformer-6",
         "guitar-focus",
         "demucs-ft",
     ]
+    assert len(models) > 4
     assert {model["provider"] for model in models} == {"mlx-audio-separator"}
-    assert {model["architecture"] for model in models} == {"Demucs", "RoFormer"}
+    assert {"Demucs", "RoFormer", "MDXC"} <= {model["architecture"] for model in models}
     assert {model["terms_status"] for model in models} == {
         "open",
         "non-commercial",
@@ -55,8 +64,6 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
     }
     for model in models:
         assert model["supported_platforms"] == ["macos-arm64"]
-        assert model["curated"] is True
-        assert model["catalog_origin"] == "Riffroom curated catalog"
         platform_key = current_platform_key()
         expected_compatibility = platform_key in model["supported_platforms"]
         assert model["compatibility"]["platform_key"] == platform_key
@@ -68,7 +75,98 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         assert model["prepared"] is False
         assert model["cache_bytes"] == 0
         assert model["cache_label"] == "Downloads on first use"
+    for model in models[:4]:
+        assert model["curated"] is True
+        assert model["catalog_group"] == "curated"
+        assert model["catalog_origin"] == "Riffroom curated catalog"
         assert model["cache_cleanup_supported"] is True
+    for model in models[4:]:
+        assert model["curated"] is False
+        assert model["catalog_group"] == "community"
+        assert model["terms_status"] == "unverified"
+        assert "Checkpoint terms unverified" in model["license"]
+        assert model["catalog_origin"].startswith("mlx-audio-separator 0.1.7 bundled")
+
+
+def test_curated_profiles_are_unchanged_and_community_order_is_deterministic(application):
+    _, client = application
+
+    models = client.get("/api/models").json()
+
+    assert [(item["id"], item["filename"], item["stems"]) for item in models[:4]] == [
+        ("demucs-6", "htdemucs_6s.yaml", list(CURATED_MODELS["demucs-6"].stems)),
+        ("roformer-6", "BS-Roformer-SW.ckpt", list(CURATED_MODELS["roformer-6"].stems)),
+        ("guitar-focus", "becruily_guitar.ckpt", list(CURATED_MODELS["guitar-focus"].stems)),
+        ("demucs-ft", "htdemucs_ft.yaml", list(CURATED_MODELS["demucs-ft"].stems)),
+    ]
+    community_order = [(item["name"].casefold(), item["filename"].casefold()) for item in models[4:]]
+    assert community_order == sorted(community_order)
+    assert [model.id for model in filter_models()] == [item["id"] for item in models]
+    assert all(model.catalog_group == "community" for model in filter_models(catalog_group="community"))
+    mdxc = filter_models(catalog_group="community", architecture="MDXC", query="drum")
+    assert len(mdxc) == 1
+    assert mdxc[0].filename == "MDX23C-DrumSep-aufr33-jarredou.ckpt"
+
+
+def test_community_ids_and_explicit_stem_boundary_are_safe_and_deterministic():
+    registry = {
+        "roformer_download_list": {
+            "Explicit stems": {"safe.ckpt": "safe.yaml"},
+            "Missing stems": {"unknown.ckpt": "unknown.yaml"},
+            "Unsafe URL": {"https://example.test/model.ckpt": "unsafe.yaml"},
+            "Unsafe path": {"../escape.ckpt": "escape.yaml"},
+            "Unsafe Windows path": {"..\\escape.ckpt": "escape.yaml"},
+            "Executable": {"plugin.py": "plugin.yaml"},
+            "Unsafe stem": {"unsafe-stem.ckpt": "unsafe-stem.yaml"},
+        }
+    }
+    scores = {
+        "safe.ckpt": {"stems": ["vocals", "other"]},
+        "unknown.ckpt": {"model_name": "No output metadata"},
+        "https://example.test/model.ckpt": {"stems": ["vocals", "other"]},
+        "../escape.ckpt": {"stems": ["vocals", "other"]},
+        "..\\escape.ckpt": {"stems": ["vocals", "other"]},
+        "plugin.py": {"stems": ["vocals", "other"]},
+        "unsafe-stem.ckpt": {"stems": ["../vocals", "other"]},
+    }
+
+    first = community_profiles_from_metadata(registry, scores)
+    second = community_profiles_from_metadata(registry, scores)
+
+    assert first == second
+    assert len(first) == 1
+    assert first[0].filename == "safe.ckpt"
+    assert first[0].stems == ("vocals", "other")
+    assert first[0].id == community_model_id("safe.ckpt")
+    assert first[0].id != first[0].filename
+    assert all(model.stems for model in COMMUNITY_MODELS.values())
+    assert "UVR-BVE-4B_SN-44100-2.pth" not in {model.filename for model in COMMUNITY_MODELS.values()}
+
+
+def test_only_trusted_community_ids_can_start_separation(application):
+    app, client = application
+    track = upload(client)
+    community = next(iter(COMMUNITY_MODELS.values()))
+
+    response = client.post(
+        f"/api/tracks/{track['id']}/separate", json={"model_id": community.id}
+    )
+    assert response.status_code == 202
+    assert app.state.started[-1] == (track["id"], community.id)
+
+    response = client.post(
+        f"/api/tracks/{track['id']}/separate", json={"model_id": community.filename}
+    )
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Unknown separation model."}
+
+
+def test_local_separator_rejects_an_untrusted_filename_before_runtime_lookup():
+    from riffroom.separator import LocalSeparator
+
+    separator = object.__new__(LocalSeparator)
+    with pytest.raises(ValueError, match="trusted catalog"):
+        separator.load_model("../arbitrary.py")
 
 
 def write_model_assets(root, model_id, byte=b"prepared"):
@@ -179,6 +277,18 @@ def test_delete_unknown_model_cache_returns_404(application):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Separation model not found."}
+
+
+def test_shared_community_config_cannot_be_removed(application):
+    app, client = application
+    model = next(model for model in COMMUNITY_MODELS.values() if not model.cache_cleanup_supported)
+    assets = write_model_assets(app.state.jobs.cache, model.id)
+
+    response = client.delete(f"/api/models/{model.id}/cache")
+
+    assert response.status_code == 409
+    assert "shared model config" in response.json()["detail"]
+    assert all(path.is_file() for path in assets)
 
 
 def add_runs(app, track_id, run_ids, active_run=None):

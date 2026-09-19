@@ -8,7 +8,7 @@ FastAPI on 127.0.0.1:8765
         ├── atomic JSON project store
         └── one-at-a-time job queue
                 └── cancellable Python subprocess
-                        └── curated model profile → provider/runtime
+                        └── trusted catalog profile → provider/runtime
                                 └── current MLX inference
                                 └── aligned float WAV stems + waveform peaks
 
@@ -23,9 +23,11 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 - `audio.py`: FFmpeg format conversion, metadata limits, waveforms, alignment validation.
 - `store.py`: atomic manifests; each track owns its inputs and run folders.
 - `jobs.py`: one inference job at a time; process-group cancellation; error and restart recovery.
-- `models.py`: provider-aware declarative catalog consumed by the UI. Profiles describe architecture,
-  runtime provider, supported platform capabilities, checkpoint terms, catalog origin and exact app-owned
-  cache files. The API computes compatibility and prepared-file state without changing inference dispatch.
+- `models.py`: provider-aware declarative catalog consumed by the UI. The curated layer is static. The community
+  layer reads only the pinned runtime's bundled `models.json` and `models-scores.json`, admits entries with an
+  explicit non-empty stem list, and derives opaque SHA-256-based IDs. Profiles describe architecture, runtime
+  provider, supported platform capabilities, checkpoint terms, catalog origin and exact app-owned cache files.
+  The API computes compatibility and prepared-file state without changing inference dispatch.
 - `separator.py`: version-specific runtime adapter. Atomic downloads, project-local Demucs conversion cache, dedicated guitar profile, non-normalizing float WAV writer.
 - `demucs_cache.py`: strict restoration of native MLX parameter paths, correcting the pinned upstream cached-weight loading bug.
 - `worker.py`: isolated inference entry point and phase messages. Successful aligned outputs are published together; partial outputs never appear as finished runs.
@@ -36,11 +38,13 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 
 ## Adding a model
 
-Add a profile with a unique id, checkpoint filename, expected stem names, source, checkpoint terms,
-architecture, provider and explicit platform capabilities. For a checkpoint in the current upstream registry,
-the MLX adapter handles the rest. For another architecture or provider, implement a reviewed adapter that writes
-aligned stereo 44.1 kHz float WAVs and the same stem manifest. Do not let raw user input select arbitrary
-checkpoint files or executable code.
+Add a curated profile with a unique ID, checkpoint filename, expected stem names, source, checkpoint terms,
+architecture, provider and explicit platform capabilities. Eligible community profiles are generated only from
+the pinned runtime metadata: `models.json` must declare a safe checkpoint basename (and optional config basename),
+and `models-scores.json` must explicitly list its output stems. Friendly names and filenames are not parsed to
+guess outputs. For another architecture or provider, implement a reviewed adapter that writes aligned stereo
+44.1 kHz float WAVs and the same stem manifest. Do not let raw user input select arbitrary checkpoint files,
+paths, URLs, Python modules or executable code.
 
 Compatibility is capability-driven per profile and provider, not inferred from an architecture name or a UI
 operating-system check. The current catalog keeps the existing `mlx-audio-separator` Apple Silicon execution
@@ -49,10 +53,13 @@ backends and profiles are validated.
 
 Prepared-file state is intentionally narrower than total provider disk use. Each curated profile declares the
 exact checkpoint, config and/or converted MLX files that Riffroom owns beneath its configured `data/models`
-directory. A profile is Prepared only when every declared file is present and non-empty; otherwise it will
+directory. Community profiles use only the exact checkpoint/config basenames supplied by bundled `models.json`;
+cleanup is disabled when a config is shared across registry entries. A profile is Prepared only when every
+declared file is present and non-empty; otherwise it will
 prepare on next use. Cleanup unlinks only those declared filenames (and their exact atomic-download `.part`
 counterparts), never a request-supplied path. It does not touch track originals, run manifests, generated WAVs,
-the shared model registry, or provider-level caches such as `data/models/torch` / `TORCH_HOME`. In particular,
+shared provider metadata (`download_checks.json`, `vr_model_data.json`, `mdx_model_data.json`), or provider-level
+caches such as `data/models/torch` / `TORCH_HOME`. In particular,
 removing Demucs prepared files may leave upstream Torch downloads on disk even though the next use converts the
 model again.
 
