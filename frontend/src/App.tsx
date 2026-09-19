@@ -19,6 +19,13 @@ import {
 import { api } from "./api";
 import { active, time, type Model, type Track } from "./types";
 import Mixer from "./components/Mixer";
+import {
+  ensureModelVisible,
+  loadVisibleModelIds,
+  saveVisibleModelIds,
+  setModelVisibility,
+  validateVisibleModelIds,
+} from "./modelPreferences";
 
 const json = (value: unknown): RequestInit => ({
   method: "POST",
@@ -66,11 +73,16 @@ export default function App() {
   );
   const [modelSearch, setModelSearch] = useState("");
   const [architectureFilter, setArchitectureFilter] = useState("");
+  const [visibleModelIds, setVisibleModelIds] = useState<string[] | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const track = tracks.find((t) => t.id === selectedId);
   const run = track?.runs.find((r) => r.id === (runId ?? track.active_run));
   const model = models.find((m) => m.id === modelId);
   const curatedModels = models.filter((item) => item.curated);
+  const visibleModels = models.filter(
+    (item) =>
+      item.compatibility.compatible && visibleModelIds?.includes(item.id),
+  );
   const managerArchitectures = Array.from(
     new Set(
       models
@@ -91,7 +103,13 @@ export default function App() {
         )),
   );
   const refreshModels = useCallback(async () => {
-    setModels(await api<Model[]>("/models"));
+    const catalog = await api<Model[]>("/models");
+    setModels(catalog);
+    setVisibleModelIds((current) =>
+      current === null
+        ? loadVisibleModelIds(catalog)
+        : validateVisibleModelIds(current, catalog),
+    );
   }, []);
   const refresh = useCallback(async () => {
     try {
@@ -114,6 +132,21 @@ export default function App() {
     const timer = setInterval(refresh, 2000);
     return () => clearInterval(timer);
   }, [refresh, refreshModels]);
+  useEffect(() => {
+    if (visibleModelIds !== null) saveVisibleModelIds(visibleModelIds);
+  }, [visibleModelIds]);
+  useEffect(() => {
+    if (
+      visibleModelIds !== null &&
+      models.length > 0 &&
+      !visibleModelIds.includes(modelId)
+    ) {
+      const firstVisible = models.find((item) =>
+        visibleModelIds.includes(item.id),
+      );
+      if (firstVisible) setModelId(firstVisible.id);
+    }
+  }, [modelId, models, visibleModelIds]);
   useEffect(() => {
     if (!openModal && !deleteTarget) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -153,7 +186,39 @@ export default function App() {
     setSelectedId(t.id);
     setRunId(null);
     setImportOpen(false);
-    setModelId(t.runs.at(-1)?.model_id ?? t.pending_model ?? "demucs-6");
+    const preferredModelId =
+      t.runs.at(-1)?.model_id ?? t.pending_model ?? "demucs-6";
+    setModelId(
+      visibleModelIds?.includes(preferredModelId)
+        ? preferredModelId
+        : (visibleModels[0]?.id ?? preferredModelId),
+    );
+  }
+  function chooseModel(nextModelId: string) {
+    setVisibleModelIds((current) =>
+      ensureModelVisible(current ?? [], nextModelId, models),
+    );
+    setModelId(nextModelId);
+  }
+  function changeModelVisibility(nextModelId: string, visible: boolean) {
+    const result = setModelVisibility(
+      visibleModelIds ?? [],
+      nextModelId,
+      visible,
+      models,
+    );
+    if (result.error) {
+      setModelError(result.error);
+      return;
+    }
+    setModelError("");
+    setVisibleModelIds(result.visibleModelIds);
+    if (!visible && modelId === nextModelId) {
+      const firstVisible = models.find((item) =>
+        result.visibleModelIds.includes(item.id),
+      );
+      if (firstVisible) setModelId(firstVisible.id);
+    }
   }
   async function upload(file?: File) {
     if (!file || uploading) return;
@@ -370,7 +435,7 @@ export default function App() {
                     <button
                       className={`model-card ${modelId === m.id ? "chosen" : ""}`}
                       key={m.id}
-                      onClick={() => setModelId(m.id)}
+                      onClick={() => chooseModel(m.id)}
                     >
                       <div>
                         <span className="model-badge">{m.badge}</span>
@@ -540,14 +605,23 @@ export default function App() {
                   <select
                     aria-label="Separation model"
                     value={modelId}
-                    onChange={(e) => setModelId(e.target.value)}
+                    onChange={(e) => chooseModel(e.target.value)}
                   >
-                    {models.map((m) => (
+                    {visibleModels.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name}
                       </option>
                     ))}
                   </select>
+                  <button
+                    className="manage-models-button"
+                    onClick={() => {
+                      setModelError("");
+                      setOpenModal("models");
+                    }}
+                  >
+                    Manage models
+                  </button>
                   <button
                     className="small-button"
                     disabled={active(track)}
@@ -615,7 +689,8 @@ export default function App() {
             <h2 id="model-manager-title">Model manager</h2>
             <p>
               Start with Riffroom&apos;s recommended models, or explore
-              community checkpoints listed by the pinned local runtime.
+              community checkpoints listed by the pinned local runtime. Choose
+              which compatible models appear in your separation menus.
             </p>
             <p className="model-download-note">
               Prepared files stay in Riffroom&apos;s local model cache. Removing
@@ -757,6 +832,18 @@ export default function App() {
                       Source for {m.name}
                     </a>
                     <div>
+                      {m.compatibility.compatible && (
+                        <label className="model-visibility-control">
+                          <input
+                            type="checkbox"
+                            checked={visibleModelIds?.includes(m.id) ?? false}
+                            onChange={(event) =>
+                              changeModelVisibility(m.id, event.target.checked)
+                            }
+                          />
+                          <span>Show in separation menus</span>
+                        </label>
+                      )}
                       {m.prepared && m.cache_cleanup_supported && (
                         <button
                           className="remove-cache-button"
@@ -776,7 +863,7 @@ export default function App() {
                           className="small-button"
                           aria-pressed={modelId === m.id}
                           onClick={() => {
-                            setModelId(m.id);
+                            chooseModel(m.id);
                             setOpenModal(null);
                           }}
                         >

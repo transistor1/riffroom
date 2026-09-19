@@ -1,6 +1,24 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
 
+const modelWorkingSetKey = "riffroom:model-working-set:v1";
+
+test.beforeEach(async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(
+    (key) => localStorage.removeItem(key),
+    modelWorkingSetKey,
+  );
+  await page.reload();
+});
+
+test.afterEach(async ({ page }) => {
+  await page.evaluate(
+    (key) => localStorage.removeItem(key),
+    modelWorkingSetKey,
+  );
+});
+
 test("import, real separation, mixing, looping, model comparison and removal", async ({
   page,
   request,
@@ -14,7 +32,6 @@ test("import, real separation, mixing, looping, model comparison and removal", a
       separationRequests.push(request.url());
     }
   });
-  await page.goto("/");
   await expect(page.getByRole("heading", { name: "Your song." })).toBeVisible();
   await page.getByRole("button", { name: "Model manager" }).click();
   const manager = page.getByRole("dialog", { name: "Model manager" });
@@ -39,6 +56,7 @@ test("import, real separation, mixing, looping, model comparison and removal", a
     manager.getByRole("link", { name: "Source for Demucs · 6 stems" }),
   ).toHaveAttribute("href", "https://github.com/facebookresearch/demucs");
   await manager.getByRole("button", { name: "Community" }).click();
+  expect(await manager.locator(".manager-model").count()).toBeGreaterThan(4);
   await manager.getByLabel("Architecture filter").selectOption("MDXC");
   await manager.getByLabel("Search models").fill("DrumSep");
   await expect(manager.locator(".manager-model")).toHaveCount(1);
@@ -48,14 +66,23 @@ test("import, real separation, mixing, looping, model comparison and removal", a
   await expect(
     community.getByText("Checkpoint terms unverified", { exact: true }),
   ).toBeVisible();
+  const communityName = await community.getByRole("heading").innerText();
+  const communityVisibility = community.getByRole("checkbox", {
+    name: "Show in separation menus",
+  });
+  await expect(communityVisibility).not.toBeChecked();
   await community.getByRole("button", { name: "Use model" }).click();
   await expect(manager).toBeHidden();
   await expect(page.getByText("Selected from Model Manager")).toBeVisible();
   await expect(page.locator(".model-card")).toHaveCount(4);
   expect(separationRequests).toEqual([]);
+  await page.evaluate(
+    (key) => localStorage.removeItem(key),
+    modelWorkingSetKey,
+  );
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Your song." })).toBeVisible();
   await page.getByRole("button", { name: "Model manager" }).click();
-  await manager.getByLabel("Search models").fill("");
-  await manager.getByRole("button", { name: "Curated" }).click();
   const roformer = manager.locator(".manager-model").filter({
     has: manager.getByRole("heading", {
       name: "RoFormer · 6 stems",
@@ -93,6 +120,57 @@ test("import, real separation, mixing, looping, model comparison and removal", a
   await expect(
     page.getByRole("button", { name: "Play", exact: true }),
   ).toBeEnabled();
+  const separationModel = page.getByLabel("Separation model", {
+    exact: true,
+  });
+  await expect(
+    separationModel.locator("option").filter({ hasText: communityName }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Manage models" }).click();
+  await manager.getByRole("button", { name: "Community" }).click();
+  await manager.getByLabel("Search models").fill("DrumSep");
+  await expect(communityVisibility).not.toBeChecked();
+  await community.getByRole("button", { name: "Use model" }).click();
+  await expect(manager).toBeHidden();
+  await expect(
+    separationModel.locator("option").filter({ hasText: communityName }),
+  ).toHaveCount(1);
+  const communityModelId = await separationModel
+    .locator("option")
+    .filter({ hasText: communityName })
+    .getAttribute("value");
+  expect(communityModelId).not.toBeNull();
+  await expect(separationModel).toHaveValue(communityModelId!);
+  await page.getByRole("button", { name: "Manage models" }).click();
+  await communityVisibility.uncheck();
+  await manager.getByRole("button", { name: "Close model manager" }).click();
+  await expect(
+    separationModel.locator("option").filter({ hasText: communityName }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Manage models" }).click();
+  await manager.getByLabel("Search models").fill("");
+  await manager.getByRole("button", { name: "Curated" }).click();
+  const runModel = manager.locator(".manager-model").filter({
+    has: manager.getByRole("heading", {
+      name: "Demucs · 6 stems",
+      exact: true,
+    }),
+  });
+  await runModel
+    .getByRole("checkbox", { name: "Show in separation menus" })
+    .uncheck();
+  await manager.getByRole("button", { name: "Close model manager" }).click();
+  await expect(
+    separationModel.locator("option").filter({
+      hasText: "Demucs · 6 stems",
+    }),
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByLabel("Separation result")
+      .locator("option")
+      .filter({ hasText: "Demucs · 6 stems" }),
+  ).toHaveCount(1);
   await page.getByRole("slider", { name: "Pitch", exact: true }).fill("2");
   await expect(
     page.getByRole("slider", { name: "Pitch", exact: true }),
@@ -167,6 +245,18 @@ test("import, real separation, mixing, looping, model comparison and removal", a
   await page.screenshot({ path: "../data/qa-mixer.png", fullPage: true });
   await page.reload();
   await page.getByRole("button", { name: /practice-check/ }).click();
+  await expect(
+    page
+      .getByLabel("Separation model", { exact: true })
+      .locator("option")
+      .filter({ hasText: "Demucs · 6 stems" }),
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByLabel("Separation result")
+      .locator("option")
+      .filter({ hasText: "Demucs · 6 stems" }),
+  ).toHaveCount(1);
   await expect(
     page.getByRole("slider", { name: "guitar volume", exact: true }),
   ).toHaveValue("0.42");

@@ -42,8 +42,13 @@ precedence if a generated catalog entry ever collides.
 All profiles use the existing `mlx-audio-separator` provider and support `macos-arm64`. The manager reports
 each profile as **Prepared** only when all of its declared Riffroom-owned files are present and non-empty;
 otherwise it reports **Downloads on first use**. Choosing **Use model** changes the current import/separation
-selection without starting work. First-use separation remains responsible for downloading and converting files;
-there is no separate install or preload job.
+selection without starting work. It also adds that model to the browser's personal working set. The full curated
+and community catalog always remains browsable in Model Manager, while normal separation menus show only this
+smaller working set. A new browser profile starts with every compatible curated model shown and no community
+models; users can show community models or hide curated models with **Show in separation menus**. The preference
+is versioned local browser state, is validated against the current API catalog, and falls back to the compatible
+curated set if storage is unavailable or invalid. At least one compatible model must remain visible. First-use
+separation remains responsible for downloading and converting files; there is no separate install or preload job.
 
 The next provider is expected to be a validated portable adapter, likely based on `python-audio-separator`.
 Adding it must not make every checkpoint universally compatible: compatibility stays per model and provider,

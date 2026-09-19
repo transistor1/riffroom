@@ -35,6 +35,9 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 - `frontend/src/components/Mixer.tsx`: shared transport, loop controls, channel state and per-result local storage. The main and per-stem waveform range controls all seek the same audio engine and React playhead position.
 - `frontend/src/components/Waveform.tsx`: waveform rendering from backend peaks.
 - `frontend/src/App.tsx`: import, library, model selection and result selection.
+- `frontend/src/modelPreferences.ts`: versioned browser-local model working-set preferences. It validates stored
+  IDs against the complete API catalog, defaults to compatible curated models and prevents normal separation
+  menus from becoming empty. The complete catalog remains in memory for Model Manager and historical run labels.
 
 ## Adding a model
 
@@ -71,7 +74,11 @@ A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The m
 - All selected stems are decoded into browser memory for sample-synchronized playback and gapless native looping. Very long tracks use significant RAM. Streaming or an AudioWorklet ring buffer is a future extension.
 - Speed uses Web Audio source playbackRate for sample-synchronized transport and mirrors that value to `@soundtouchjs/audio-worklet` 2.1.1, whose shared post-mix processor preserves tuning. At 0.5×, SoundTouch's auto WSOLA heuristic lengthens its processing windows for the lower internal tempo; rates of 0.75× and above retain the existing fixed profile. The Pitch slider, exact-value field, and reset control independently set the processor's ±12-semitone offset. SoundTouchJS and its installed support packages are distributed under MPL-2.0.
 - Switching results remounts the audio engine and stops playback. Completing the first separation selects its result automatically.
-- Mix preferences are in localStorage, while the library is on disk. Individual completed separation results can be removed without touching the normalized original or other results; deleting the selected result also removes its saved mix preference. Cross-browser preference sync and named saved mixes are future work.
+- Mix preferences and the personal model working set are in localStorage, while the library is on disk. The model
+  working set affects only normal selection menus; Model Manager discovery and saved-run model labels use the full
+  API catalog. Individual completed separation results can be removed without touching the normalized original or
+  other results; deleting the selected result also removes its saved mix preference. Cross-browser preference sync
+  and named saved mixes are future work.
 - Model prepared-file cleanup is blocked while that model is queued or processing. It is idempotent and does not remove imported audio, track history or completed separation results.
 - Manifests are simple JSON to keep the first version inspectable. SQLite can replace Store without changing the audio worker or mixer.
 - Source audio is never modified. The imported copy is resampled to 44.1 kHz stereo to standardize model and browser alignment. Every stem must have exactly the same frame count before publication.
