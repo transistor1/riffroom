@@ -1,6 +1,6 @@
 # Validation · 2026-09-18
 
-Test machine: Apple M1 MacBook Air, 16 GB memory, macOS 27.0. Python 3.11.16 in a project-local Conda environment. MLX 0.31.2, mlx-audio-separator 0.1.7, Torch/Torchaudio 2.8.0, Demucs 4.0.1. FFmpeg 8.1.1. Frontend built with React 19 / TypeScript / Vite 6.
+Test machine: Apple M1 MacBook Air, 16 GB memory, macOS 27.0. Python 3.11.16 in the project-local environment. MLX 0.31.2, mlx-audio-separator 0.1.7, Torch/Torchaudio 2.8.0, Demucs 4.0.1. FFmpeg 8.1.1. Frontend built with React 19 / TypeScript / Vite 6.
 
 ## Demucs cache regression discovered and fixed
 

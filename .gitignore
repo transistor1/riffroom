@@ -1,5 +1,4 @@
 .env/
-.conda-pkgs/
 .cache/
 data/
 __pycache__/

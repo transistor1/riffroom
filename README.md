@@ -4,15 +4,13 @@ A personal guitar practice room that runs on your Mac. Open or drop a song, sepa
 
 ## Start on this Mac
 
-The environment, frontend, FFmpeg, and model caches have been prepared.
-
 **Double-click `Riffroom.command`**, or run:
 
 ```bash
 ./start.sh
 ```
 
-It opens **http://127.0.0.1:8765**. Keep the Terminal window open; Control-C stops the server. Opening the launcher again reuses the running app. No account, API key, paid service, or cloud upload is needed.
+That is the whole installation process. On the first launch, Riffroom prepares its project environment, installs its packages, builds the interface, and then opens **http://127.0.0.1:8765**. Keep the Terminal window open; Control-C stops the server. Opening the launcher again reuses the running app. No account, API key, paid service, or cloud upload is needed.
 
 ## Practice
 
@@ -47,7 +45,7 @@ Model research, primary sources, and weight licensing are in [docs/models.md](do
 - `data/tracks/<id>/track.json`: track metadata and completed run references.
 - `data/tracks/<id>/runs/<run-id>/`: model outputs, waveforms and diagnostic log.
 - `data/models/`: downloaded/converted weights, reusable across songs.
-- `.env/`: isolated Conda Python environment.
+- `.env/`: isolated, project-local standard Python virtual environment.
 
 Deleting a track removes its Riffroom copy and results. It never touches the source file you imported. Back up `data/tracks` to preserve your library; browser local storage holds mixer preferences. `RIFFROOM_DATA=/absolute/path ./start.sh` selects a different data folder before launch.
 
@@ -57,19 +55,13 @@ The server listens only on `127.0.0.1`. It rejects unexpected hostnames and cros
 
 ## Fresh installation
 
-Requirements: Apple Silicon Mac (M1 or newer), 16 GB memory recommended, macOS 14 or later with a compatible MLX wheel; this build was verified on the supplied M1 / macOS 27 machine. Python 3.11 via Conda, Node 22+ recommended, FFmpeg, and Xcode Command Line Tools are needed for installation. The lockfile reflects this Mac and may require adjustment on older macOS versions.
+Riffroom currently requires an Apple Silicon Mac (M1 or newer); 16 GB memory is recommended. It targets macOS 14 or later with a compatible MLX wheel and was verified on the supplied M1 / macOS 27 machine. The lockfile reflects this Mac and may require adjustment on older macOS versions.
 
-```bash
-# If needed, install FFmpeg and build tools:
-brew install ffmpeg
-xcode-select --install
+Clone, download, or unzip Riffroom, then double-click `Riffroom.command`. You can also run `./start.sh` from Terminal. No separate setup command is required.
 
-# From the repository folder, with conda and npm on PATH:
-./scripts/setup.sh
-./start.sh
-```
+Riffroom uses a standard Python virtual environment inside `.env` and does not require Conda. It accepts Python 3.11, 3.12, or 3.13. If Python, Node.js/npm, or FFmpeg/ffprobe is missing, the launcher uses Homebrew to install only the missing tool. If Homebrew itself is missing, the launcher shows its official installation command and asks you to double-click `Riffroom.command` again afterward. Apple's command-line tools are only requested if a package actually needs them.
 
-Setup creates the project-local environment, installs pinned Python dependencies and the npm lockfile, and builds the UI. It uses the SDK returned by `xcrun` to avoid a mismatched beta SDK/compiler. Model weights download when each profile is first used. A full song can take several minutes on an M1; there is no fake percentage or promised completion time.
+First-time setup installs the pinned Python dependencies and npm lockfile, keeps the development checks available in this source checkout, and builds the UI. Later launches automatically refresh setup after dependency manifests change. An existing working `.env` is reused. Setup uses the SDK returned by `xcrun`, when available, to avoid a mismatched beta SDK/compiler. Model weights download when each profile is first used. A full song can take several minutes on an M1; there is no fake percentage or promised completion time.
 
 Limits: 512 MB uploads and 20-minute tracks. Decoded audio/stems can use substantially more disk and memory than an MP3. The browser decodes one selected result into memory. Shorter tracks and fewer simultaneous tabs are preferable on a 16 GB Mac.
 
@@ -108,3 +100,4 @@ The browser test imports an original synthetic fixture, runs the real default ML
 - **Server was closed:** reopen `Riffroom.command`. Interrupted jobs are marked for retry; finished results remain.
 - **Port 8765 in use:** the launcher reuses Riffroom if it owns the port; otherwise it asks you to stop the other app.
 - **SDK build error:** make sure `xcrun --sdk macosx --show-sdk-path` resolves to an SDK compatible with the selected Xcode toolchain. Setup already includes the workaround used on this Mac.
+- **Shared Homebrew on a multi-user Mac:** setup can use compatible tools that are already installed, including an unlinked supported Python. If another account owns Homebrew and a tool is missing, use that account or ask an administrator to install the tool.
