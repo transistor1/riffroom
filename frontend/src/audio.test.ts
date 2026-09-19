@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { channelGain, MixerEngine } from "./audio";
+import { channelGain, MixerEngine, stretchParametersForRate } from "./audio";
 
 const soundTouchMock = vi.hoisted(() => {
   const nodes: any[] = [];
@@ -121,6 +121,31 @@ describe("mix routing", () => {
   });
 });
 
+describe("SoundTouch stretch profiles", () => {
+  it("uses SoundTouch auto windows only around half speed", () => {
+    expect(stretchParametersForRate(0.5)).toEqual({
+      sequenceMs: 0,
+      seekWindowMs: 0,
+      overlapMs: 12,
+      quickSeek: false,
+    });
+    expect(stretchParametersForRate(0.55)).toEqual(
+      stretchParametersForRate(0.5),
+    );
+  });
+
+  it("preserves the existing profile above half speed", () => {
+    for (const rate of [0.56, 0.75, 0.9, 1, 1.1, 1.25]) {
+      expect(stretchParametersForRate(rate)).toEqual({
+        sequenceMs: 80,
+        seekWindowMs: 20,
+        overlapMs: 12,
+        quickSeek: false,
+      });
+    }
+  });
+});
+
 it("starts all stems on the same clock and keeps a seek in sync", async () => {
   const player = new MixerEngine();
   player.setMix(mix);
@@ -176,8 +201,8 @@ it("keeps tempo and requested pitch independent", async () => {
   expect(nodes.map((node) => node.playbackRate.value)).toEqual([0.5, 0.5]);
   const processor = soundTouchMock.nodes.at(-1);
   expect(processor.setStretchParameters).toHaveBeenCalledWith({
-    sequenceMs: 80,
-    seekWindowMs: 20,
+    sequenceMs: 0,
+    seekWindowMs: 0,
     overlapMs: 12,
     quickSeek: false,
   });
