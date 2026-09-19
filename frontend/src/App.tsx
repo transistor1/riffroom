@@ -25,6 +25,10 @@ const json = (value: unknown): RequestInit => ({
   body: JSON.stringify(value),
 });
 
+type DeleteTarget =
+  | { kind: "track"; trackId: string }
+  | { kind: "run"; trackId: string; runId: string };
+
 export default function App() {
   const [models, setModels] = useState<Model[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -37,7 +41,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [help, setHelp] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const track = tracks.find((t) => t.id === selectedId);
   const run = track?.runs.find((r) => r.id === (runId ?? track.active_run));
@@ -66,7 +70,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, [refresh]);
   useEffect(() => {
-    if (!help && !deleteId) return;
+    if (!help && !deleteTarget) return;
     const previous = document.activeElement as HTMLElement | null;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
     const controls = () =>
@@ -79,7 +83,7 @@ export default function App() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setHelp(false);
-        setDeleteId(null);
+        setDeleteTarget(null);
       }
       if (event.key === "Tab") {
         const items = controls(),
@@ -99,7 +103,7 @@ export default function App() {
       document.removeEventListener("keydown", onKey);
       previous?.focus();
     };
-  }, [help, deleteId]);
+  }, [help, deleteTarget]);
   function selectTrack(t: Track) {
     setSelectedId(t.id);
     setRunId(null);
@@ -343,7 +347,9 @@ export default function App() {
                   className="icon-button delete-track"
                   aria-label="Delete track"
                   title="Delete track"
-                  onClick={() => setDeleteId(track.id)}
+                  onClick={() =>
+                    setDeleteTarget({ kind: "track", trackId: track.id })
+                  }
                 >
                   <Trash2 size={17} />
                 </button>
@@ -392,23 +398,42 @@ export default function App() {
               )}
               {track.runs.length > 0 && (
                 <div className="run-select">
-                  <label>
-                    Listening to{" "}
-                    <select
-                      aria-label="Separation result"
-                      value={runId ?? track.active_run ?? "original"}
-                      onChange={(e) => setRunId(e.target.value)}
-                    >
-                      <option value="original">Original mix</option>
-                      {track.runs.map((r, i) => (
-                        <option key={r.id} value={r.id}>
-                          {models.find((m) => m.id === r.model_id)?.name ??
-                            r.model_id}{" "}
-                          · take {i + 1}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <div className="run-picker">
+                    <label>
+                      Listening to{" "}
+                      <select
+                        aria-label="Separation result"
+                        value={runId ?? track.active_run ?? "original"}
+                        onChange={(e) => setRunId(e.target.value)}
+                      >
+                        <option value="original">Original mix</option>
+                        {track.runs.map((r, i) => (
+                          <option key={r.id} value={r.id}>
+                            {models.find((m) => m.id === r.model_id)?.name ??
+                              r.model_id}{" "}
+                            · take {i + 1}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {run && (
+                      <button
+                        className="icon-button delete-run"
+                        aria-label="Delete separation result"
+                        title="Delete separation result"
+                        disabled={active(track)}
+                        onClick={() =>
+                          setDeleteTarget({
+                            kind: "run",
+                            trackId: track.id,
+                            runId: run.id,
+                          })
+                        }
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
                   <span>Mix settings save automatically</span>
                 </div>
               )}
@@ -544,38 +569,76 @@ export default function App() {
           </section>
         </div>
       )}
-      {deleteId && (
+      {deleteTarget && (
         <div className="modal-backdrop">
           <section
             className="modal compact"
             role="dialog"
             aria-modal="true"
-            aria-label="Delete track confirmation"
+            aria-label={
+              deleteTarget.kind === "run"
+                ? "Delete separation result confirmation"
+                : "Delete track confirmation"
+            }
           >
-            <h2>Remove this track?</h2>
-            <p>
-              This deletes the imported copy and its separated stems from
-              Riffroom. Your original file is untouched.
-            </p>
+            <h2>
+              {deleteTarget.kind === "run"
+                ? "Remove this separation result?"
+                : "Remove this track?"}
+            </h2>
+            {deleteTarget.kind === "run" ? (
+              <p>
+                This removes only this generated set of stems. Your original
+                audio and other separation results will remain.
+              </p>
+            ) : (
+              <p>
+                This deletes the imported copy and its separated stems from
+                Riffroom. Your original file is untouched.
+              </p>
+            )}
             <div className="dialog-actions">
               <button
                 className="small-button"
-                onClick={() => setDeleteId(null)}
+                onClick={() => setDeleteTarget(null)}
               >
-                Keep track
+                {deleteTarget.kind === "run" ? "Keep result" : "Keep track"}
               </button>
               <button
                 className="danger-button"
+                disabled={
+                  deleteTarget.kind === "run" &&
+                  active(
+                    tracks.find((item) => item.id === deleteTarget.trackId),
+                  )
+                }
                 onClick={() => {
-                  const id = deleteId;
-                  setDeleteId(null);
+                  const target = deleteTarget;
+                  setDeleteTarget(null);
                   void action(async () => {
-                    await api(`/tracks/${id}`, { method: "DELETE" });
-                    if (selectedId === id) setSelectedId(null);
+                    if (target.kind === "track") {
+                      await api(`/tracks/${target.trackId}`, {
+                        method: "DELETE",
+                      });
+                      if (selectedId === target.trackId) setSelectedId(null);
+                      return;
+                    }
+                    await api(
+                      `/tracks/${target.trackId}/runs/${target.runId}`,
+                      { method: "DELETE" },
+                    );
+                    try {
+                      localStorage.removeItem(
+                        `riffroom:mix:${target.trackId}:${target.runId}`,
+                      );
+                    } catch {
+                      /* Storage may be disabled. */
+                    }
+                    if (selectedId === target.trackId) setRunId(null);
                   });
                 }}
               >
-                Remove track
+                {deleteTarget.kind === "run" ? "Remove result" : "Remove track"}
               </button>
             </div>
           </section>

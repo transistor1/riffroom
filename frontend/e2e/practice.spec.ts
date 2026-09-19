@@ -134,6 +134,31 @@ test("import, real separation, mixing, looping, model comparison and removal", a
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+  await page
+    .getByRole("button", { name: "Delete separation result", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Remove this separation result?" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/original audio and other separation results will remain/i),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Stem mixer", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Remove result", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Original track", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Separation result")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", {
+      name: "Delete separation result",
+      exact: true,
+    }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Delete track", exact: true }).click();
   await page.getByRole("button", { name: "Remove track", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Your song." })).toBeVisible();

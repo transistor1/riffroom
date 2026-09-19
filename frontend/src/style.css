@@ -986,9 +986,21 @@ h1 em {
   color: #8fa181;
   font-size: 10px;
 }
+.run-picker {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
 .run-select select {
   margin-left: 8px;
   font-size: 10px;
+}
+.delete-run {
+  color: #77847b;
+  padding: 5px;
+}
+.delete-run:disabled {
+  background: transparent;
 }
 .run-select > span {
   color: #6f8166;

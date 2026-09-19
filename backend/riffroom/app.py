@@ -147,6 +147,29 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
         await jobs.cancel(track_id)
         shutil.rmtree(store.directory(track_id))
 
+    @app.delete("/api/tracks/{track_id}/runs/{run_id}", status_code=204)
+    def delete_run(track_id: str, run_id: str):
+        with store.lock:
+            track = store.get(track_id)
+            if track["status"] in ACTIVE:
+                raise HTTPException(409, "Wait for separation to finish before deleting a result.")
+            run = next((item for item in track["runs"] if item["id"] == run_id), None)
+            if run is None:
+                raise HTTPException(404, "Separation result not found.")
+
+            remaining = [item for item in track["runs"] if item["id"] != run_id]
+            if track.get("active_run") == run_id:
+                track["active_run"] = remaining[-1]["id"] if remaining else None
+            track["runs"] = remaining
+
+            # Use the manifest's matched ID, never the untrusted path parameter.
+            run_folder = store.directory(track_id) / "runs" / run["id"]
+            try:
+                shutil.rmtree(run_folder)
+            except FileNotFoundError:
+                pass
+            store.put(track)
+
     @app.get("/api/tracks/{track_id}/original")
     def original(track_id: str):
         store.get(track_id)

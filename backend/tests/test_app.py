@@ -32,6 +32,23 @@ def upload(client):
     return response.json()
 
 
+def add_runs(app, track_id, run_ids, active_run=None):
+    runs = []
+    for run_id in run_ids:
+        folder = app.state.store.directory(track_id) / "runs" / run_id
+        folder.mkdir(parents=True)
+        (folder / "guitar.wav").write_bytes(wav_bytes())
+        runs.append(
+            {
+                "id": run_id,
+                "model_id": "demucs-6",
+                "stems": [{"name": "guitar", "file": "guitar.wav"}],
+            }
+        )
+    app.state.store.update(track_id, status="ready", runs=runs, active_run=active_run)
+    return runs
+
+
 def test_import_decode_and_persist(application):
     app, client = application
     track = upload(client)
@@ -84,6 +101,71 @@ def test_model_switch_delete_and_cross_origin(application):
     assert client.delete(f"/api/tracks/{tid}").status_code == 204
     assert not app.state.store.directory(tid).exists()
     assert client.get(f"/api/tracks/{tid}").status_code == 404
+
+
+def test_delete_run_preserves_track_and_falls_back_to_newest_run(application):
+    app, client = application
+    track = upload(client)
+    tid = track["id"]
+    run_ids = [uuid4().hex for _ in range(3)]
+    add_runs(app, tid, run_ids, active_run=run_ids[1])
+    original = app.state.store.directory(tid) / "original.wav"
+    original_bytes = original.read_bytes()
+
+    response = client.delete(f"/api/tracks/{tid}/runs/{run_ids[1]}")
+
+    assert response.status_code == 204
+    updated = client.get(f"/api/tracks/{tid}").json()
+    assert [run["id"] for run in updated["runs"]] == [run_ids[0], run_ids[2]]
+    assert updated["active_run"] == run_ids[2]
+    runs_folder = app.state.store.directory(tid) / "runs"
+    assert not (runs_folder / run_ids[1]).exists()
+    assert (runs_folder / run_ids[0] / "guitar.wav").is_file()
+    assert (runs_folder / run_ids[2] / "guitar.wav").is_file()
+    assert original.read_bytes() == original_bytes
+
+
+def test_delete_last_run_clears_active_run(application):
+    app, client = application
+    track = upload(client)
+    tid, run_id = track["id"], uuid4().hex
+    add_runs(app, tid, [run_id], active_run=run_id)
+
+    assert client.delete(f"/api/tracks/{tid}/runs/{run_id}").status_code == 204
+
+    updated = client.get(f"/api/tracks/{tid}").json()
+    assert updated["runs"] == []
+    assert updated["active_run"] is None
+    assert (app.state.store.directory(tid) / "original.wav").is_file()
+
+
+def test_delete_unknown_run_returns_clear_404(application):
+    app, client = application
+    track = upload(client)
+    run_id = uuid4().hex
+    add_runs(app, track["id"], [run_id], active_run=run_id)
+
+    response = client.delete(f"/api/tracks/{track['id']}/runs/{uuid4().hex}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Separation result not found."}
+    assert app.state.store.get(track["id"])["runs"][0]["id"] == run_id
+
+
+@pytest.mark.parametrize("status", ["queued", "processing"])
+def test_delete_run_rejects_active_separation(application, status):
+    app, client = application
+    track = upload(client)
+    tid, run_id = track["id"], uuid4().hex
+    add_runs(app, tid, [run_id], active_run=run_id)
+    app.state.store.update(tid, status=status)
+
+    response = client.delete(f"/api/tracks/{tid}/runs/{run_id}")
+
+    assert response.status_code == 409
+    assert "finish" in response.json()["detail"]
+    assert app.state.store.get(tid)["runs"][0]["id"] == run_id
+    assert (app.state.store.directory(tid) / "runs" / run_id).is_dir()
 
 
 def test_alignment_rejects_wrong_length(tmp_path):
