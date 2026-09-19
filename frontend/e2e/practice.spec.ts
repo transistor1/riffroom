@@ -73,9 +73,13 @@ test("import, real separation, mixing, looping, model comparison and removal", a
     timeout: 5000,
   });
   await page.getByRole("button", { name: "Pause", exact: true }).click();
-  await page.getByRole("slider", { name: "Seek", exact: true }).fill("2");
+  const mainSeek = page.getByRole("slider", { name: "Seek", exact: true });
+  await page
+    .getByRole("slider", { name: "Seek guitar", exact: true })
+    .fill("2");
+  await expect(mainSeek).toHaveValue("2");
   await page.getByTitle("Set loop start at playhead").click();
-  await page.getByRole("slider", { name: "Seek", exact: true }).fill("4");
+  await mainSeek.fill("4");
   await page.getByTitle("Set loop end at playhead").click();
   await page.getByRole("button", { name: "Loop", exact: true }).click();
   await expect(
@@ -83,9 +87,7 @@ test("import, real separation, mixing, looping, model comparison and removal", a
   ).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Play", exact: true }).click();
   await page.waitForTimeout(3000);
-  const pos = Number(
-    await page.getByRole("slider", { name: "Seek", exact: true }).inputValue(),
-  );
+  const pos = Number(await mainSeek.inputValue());
   expect(pos).toBeGreaterThanOrEqual(2);
   expect(pos).toBeLessThan(4);
   await page.getByRole("button", { name: "Pause", exact: true }).click();

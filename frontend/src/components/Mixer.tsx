@@ -170,6 +170,10 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
     setLoop(next);
     engine.current?.setLoop(next);
   }
+  function seek(next: number) {
+    engine.current?.seek(next);
+    setPosition(next);
+  }
   function applyPitch(value: number) {
     const next = Math.round(Math.max(-12, Math.min(12, value)) * 10) / 10;
     setPitch(next);
@@ -248,11 +252,7 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
             max={track.duration}
             step="0.05"
             value={position}
-            onChange={(e) => {
-              const p = +e.target.value;
-              engine.current?.seek(p);
-              setPosition(p);
-            }}
+            onChange={(e) => seek(+e.target.value)}
           />
           <div
             className="playhead"
@@ -448,6 +448,15 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
                   peaks={stem.peaks}
                   color={color}
                   progress={position / track.duration}
+                />
+                <input
+                  aria-label={`Seek ${stem.name}`}
+                  type="range"
+                  min="0"
+                  max={track.duration}
+                  step="0.05"
+                  value={position}
+                  onChange={(e) => seek(+e.target.value)}
                 />
               </div>
               <div className="stem-actions">

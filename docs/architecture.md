@@ -27,7 +27,7 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 - `demucs_cache.py`: strict restoration of native MLX parameter paths, correcting the pinned upstream cached-weight loading bug.
 - `worker.py`: isolated inference entry point and phase messages. Successful aligned outputs are published together; partial outputs never appear as finished runs.
 - `frontend/src/audio.ts`: audio scheduling independent of React. Shared start time, seek offsets and loop boundaries prevent HTML-audio-element drift. Gain changes use short ramps. Source playback rate controls tempo; one shared post-mix SoundTouchJS AudioWorklet compensates the rate-induced pitch change and applies the independent user pitch offset. The worklet uses the default Lanczos interpolation with exhaustive seeking and music-oriented WSOLA parameters; only at rates up to 0.55× do its sequence and seek windows use SoundTouch's tempo-aware auto sizing.
-- `frontend/src/components/Mixer.tsx`: transport, loop controls, channel state and per-result local storage.
+- `frontend/src/components/Mixer.tsx`: shared transport, loop controls, channel state and per-result local storage. The main and per-stem waveform range controls all seek the same audio engine and React playhead position.
 - `frontend/src/components/Waveform.tsx`: waveform rendering from backend peaks.
 - `frontend/src/App.tsx`: import, library, model selection and result selection.
 
