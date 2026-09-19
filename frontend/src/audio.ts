@@ -1,30 +1,7 @@
-import {
-  SoundTouchNode,
-  type StretchParameters,
-} from "@soundtouchjs/audio-worklet";
+import { SoundTouchNode } from "@soundtouchjs/audio-worklet";
 // @ts-expect-error Vite resolves the package's documented processor asset import.
 import soundTouchProcessorUrl from "@soundtouchjs/audio-worklet/processor?url";
 import type { Mix, Stem } from "./types";
-
-const standardStretchParameters: StretchParameters = {
-  sequenceMs: 80,
-  seekWindowMs: 20,
-  overlapMs: 12,
-  quickSeek: false,
-};
-
-/** Let SoundTouch lengthen its WSOLA windows at the most demanding speed. */
-export function stretchParametersForRate(rate: number): StretchParameters {
-  if (rate <= 0.55) {
-    return {
-      sequenceMs: 0,
-      seekWindowMs: 0,
-      overlapMs: 12,
-      quickSeek: false,
-    };
-  }
-  return standardStretchParameters;
-}
 
 export function channelGain(name: string, mix: Mix): number {
   const channel = mix[name];
@@ -92,7 +69,12 @@ export class MixerEngine {
     }
     if (this.soundTouch) return;
     const node = new SoundTouchNode({ context: ctx, outputChannelCount: 2 });
-    node.setStretchParameters(stretchParametersForRate(this.rate));
+    node.setStretchParameters({
+      sequenceMs: 80,
+      seekWindowMs: 20,
+      overlapMs: 12,
+      quickSeek: false,
+    });
     this.soundTouch = node;
     this.updateSoundTouchParameters();
     this.master!.connect(node).connect(this.limiter!);
