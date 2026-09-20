@@ -6,11 +6,16 @@ from pathlib import Path
 
 from riffroom.audio import write_float_stem
 from riffroom.models import ModelProfile
+from riffroom.providers.base import normalized_stem_paths
 from riffroom.separator import LocalSeparator, configure_demucs_cache
 
 
 class MlxAudioSeparatorProvider:
     """Run a trusted catalog profile through mlx-audio-separator."""
+
+    def is_available(self) -> bool:
+        """The MLX runtime is installed as part of the current app environment."""
+        return True
 
     def separate(
         self,
@@ -51,11 +56,4 @@ class MlxAudioSeparatorProvider:
         on_model_loaded()
         names = {name: name for name in profile.stems}
         separator.separate(str(source), custom_output_names=names)
-        paths = {name: output / f"{name}.wav" for name in profile.stems}
-        # The library uses case-insensitive stem names but model-dependent filename casing.
-        for name, path in paths.items():
-            if not path.exists():
-                matches = [candidate for candidate in output.glob("*.wav") if candidate.stem.lower() == name]
-                if len(matches) == 1:
-                    matches[0].rename(path)
-        return paths
+        return normalized_stem_paths(profile.stems, output)

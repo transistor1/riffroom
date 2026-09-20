@@ -69,7 +69,7 @@ def test_worker_dispatches_paths_and_writes_unchanged_manifest(tmp_path, monkeyp
     ]
     assert messages == [
         "Loading model · first use downloads and converts the weights",
-        "Separating instruments on your Mac · this can take several minutes",
+        "Separating instruments · this can take several minutes",
         "Preparing waveforms and playback",
         "Ready to practice",
     ]

@@ -8,9 +8,10 @@ FastAPI on 127.0.0.1:8765
         ├── atomic JSON project store
         └── one-at-a-time job queue
                 └── cancellable Python subprocess
-                        └── trusted catalog profile → provider/runtime
-                                └── current MLX inference
-                                └── aligned float WAV stems + waveform peaks
+                        ├── trusted catalog profile → provider/runtime
+                        │       ├── current production MLX inference
+                        │       └── out-of-process audio-separator bridge (not yet routed)
+                        └── aligned float WAV stems + waveform peaks
 
 Browser Web Audio: shared AudioContext → one source/gain per stem
                    → master gain → shared SoundTouchJS AudioWorklet
@@ -28,10 +29,11 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
   explicit non-empty stem list, and derives opaque SHA-256-based IDs. Profiles describe architecture, runtime
   provider, supported platform capabilities, checkpoint terms, catalog origin and exact app-owned cache files.
   The API computes compatibility and prepared-file state without changing inference dispatch.
-- `providers/`: the trusted separation-provider boundary. `base.py` defines the small provider contract,
-  `__init__.py` resolves provider IDs through an explicit server-owned registry, and `mlx.py` owns construction and
-  parameters for the sole implemented provider, `mlx-audio-separator`. Provider IDs never name an importable
-  module or class.
+- `providers/`: the trusted separation-provider boundary. `base.py` defines separation and runtime-availability,
+  `__init__.py` resolves provider IDs through an explicit server-owned registry, and `mlx.py` owns the current
+  production `mlx-audio-separator` runtime. `audio_separator.py` is an out-of-process bridge to a separately
+  installed `audio-separator` executable selected only by server configuration or `PATH`; no catalog model routes
+  to it yet. Provider IDs never name an importable module, class or executable path.
 - `separator.py`: low-level adapter for the pinned MLX runtime. It provides atomic downloads, a project-local
   Demucs conversion cache and the dedicated guitar profile behavior used by the MLX provider.
 - `demucs_cache.py`: strict restoration of native MLX parameter paths, correcting the pinned upstream cached-weight loading bug.
@@ -59,9 +61,9 @@ input select arbitrary checkpoint files, paths, URLs, Python modules or executab
 
 Compatibility is capability-driven per profile and provider, not inferred from an architecture name or a UI
 operating-system check. The current catalog keeps the existing `mlx-audio-separator` Apple Silicon execution
-path unchanged, and MLX is the only provider implemented today. The next phase can add a portable provider,
-likely `python-audio-separator`, after its supported backends and profiles are validated; no Windows or Linux
-runtime compatibility is claimed yet.
+path unchanged. A fixed `audio-separator` provider ID now exposes availability and an argv-only subprocess bridge,
+but no catalog profile selects it. Managed installation, validated profiles and model routing are the next slice;
+no Windows or Linux runtime compatibility is claimed yet.
 
 Prepared-file state is intentionally narrower than total provider disk use. Each curated profile declares the
 exact checkpoint, config and/or converted MLX files that Riffroom owns beneath its configured `data/models`

@@ -32,7 +32,7 @@ def run(
         source,
         output,
         cache,
-        on_model_loaded=lambda: event("Separating instruments on your Mac · this can take several minutes"),
+        on_model_loaded=lambda: event("Separating instruments · this can take several minutes"),
     )
     try:
         paths = {name: produced[name] for name in profile.stems}
