@@ -39,8 +39,12 @@ submit only these generated IDs or curated IDs; the server resolves the ID back 
 filename, path, URL, Python module or other user-supplied loading instruction is never accepted. Curated IDs take
 precedence if a generated catalog entry ever collides.
 
-All profiles use the existing `mlx-audio-separator` provider and support `macos-arm64`. The manager reports
-each profile as **Prepared** only when all of its declared Riffroom-owned files are present and non-empty;
+All profiles use the existing `mlx-audio-separator` provider and support `macos-arm64`. The worker resolves that
+provider ID through a hard-coded server-owned registry; model metadata cannot supply a Python module, class or
+path. The provider produces the profile's stem WAV files, while the shared worker retains expected-stem and
+alignment validation, waveform generation, progress sequencing and manifest writing. MLX is the only provider
+implemented today, so the abstraction makes no new platform claim and introduces no second runtime. The manager
+reports each profile as **Prepared** only when all of its declared Riffroom-owned files are present and non-empty;
 otherwise it reports **Downloads on first use**. Choosing **Use model** changes the current import/separation
 selection without starting work. It also adds that model to the browser's personal working set. The full curated
 and community catalog always remains browsable in Model Manager, while normal separation menus show only this
@@ -50,7 +54,7 @@ is versioned local browser state, is validated against the current API catalog, 
 curated set if storage is unavailable or invalid. At least one compatible model must remain visible. First-use
 separation remains responsible for downloading and converting files; there is no separate install or preload job.
 
-The next provider is expected to be a validated portable adapter, likely based on `python-audio-separator`.
+The next phase is expected to add a validated portable provider, likely based on `python-audio-separator`.
 Adding it must not make every checkpoint universally compatible: compatibility stays per model and provider,
 based on tested runtime, architecture and platform capabilities. Arbitrary remote catalog or file import remains
 deferred.
@@ -73,8 +77,9 @@ No stereo-center subtraction, EQ split, or duplicated guitar output is presented
 ## Weight management
 
 Profiles are assembled in `backend/riffroom/models.py`: curated definitions are static, while community definitions
-come only from the two pinned bundled metadata files described above. The adapter in `separator.py` uses the
-upstream model registry for downloads and the author's published Hugging Face files for guitar focus. Atomic
+come only from the two pinned bundled metadata files described above. The MLX provider owns the runtime's
+construction, separation parameters and float WAV writer override; the lower-level adapter in `separator.py` uses
+the upstream model registry for downloads and the author's published Hugging Face files for guitar focus. Atomic
 downloads prevent cancelled downloads from becoming valid cache hits. Model WAV outputs use float32 without
 independently normalizing each stem, preserving the model's relative output levels. A final playback compressor
 limits boosted sums; 100% faders are not guaranteed to reconstruct the original mix exactly because separation

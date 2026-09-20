@@ -28,9 +28,16 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
   explicit non-empty stem list, and derives opaque SHA-256-based IDs. Profiles describe architecture, runtime
   provider, supported platform capabilities, checkpoint terms, catalog origin and exact app-owned cache files.
   The API computes compatibility and prepared-file state without changing inference dispatch.
-- `separator.py`: version-specific runtime adapter. Atomic downloads, project-local Demucs conversion cache, dedicated guitar profile, non-normalizing float WAV writer.
+- `providers/`: the trusted separation-provider boundary. `base.py` defines the small provider contract,
+  `__init__.py` resolves provider IDs through an explicit server-owned registry, and `mlx.py` owns construction and
+  parameters for the sole implemented provider, `mlx-audio-separator`. Provider IDs never name an importable
+  module or class.
+- `separator.py`: low-level adapter for the pinned MLX runtime. It provides atomic downloads, a project-local
+  Demucs conversion cache and the dedicated guitar profile behavior used by the MLX provider.
 - `demucs_cache.py`: strict restoration of native MLX parameter paths, correcting the pinned upstream cached-weight loading bug.
-- `worker.py`: isolated inference entry point and phase messages. Successful aligned outputs are published together; partial outputs never appear as finished runs.
+- `worker.py`: shared isolated inference entry point, provider dispatch, phase messages, expected-stem/alignment
+  validation, waveform generation and manifest writing. Successful aligned outputs are published together;
+  partial outputs never appear as finished runs.
 - `frontend/src/audio.ts`: audio scheduling independent of React. Shared start time, seek offsets and loop boundaries prevent HTML-audio-element drift. Gain changes use short ramps. Source playback rate controls tempo; one shared post-mix SoundTouchJS AudioWorklet compensates the rate-induced pitch change and applies the independent user pitch offset. The worklet uses the default Lanczos interpolation with exhaustive seeking and music-oriented WSOLA parameters; only at rates up to 0.55× do its sequence and seek windows use SoundTouch's tempo-aware auto sizing.
 - `frontend/src/components/Mixer.tsx`: shared transport, loop controls, channel state and per-result local storage. The main and per-stem waveform range controls all seek the same audio engine and React playhead position.
 - `frontend/src/components/Waveform.tsx`: waveform rendering from backend peaks.
@@ -45,14 +52,16 @@ Add a curated profile with a unique ID, checkpoint filename, expected stem names
 architecture, provider and explicit platform capabilities. Eligible community profiles are generated only from
 the pinned runtime metadata: `models.json` must declare a safe checkpoint basename (and optional config basename),
 and `models-scores.json` must explicitly list its output stems. Friendly names and filenames are not parsed to
-guess outputs. For another architecture or provider, implement a reviewed adapter that writes aligned stereo
-44.1 kHz float WAVs and the same stem manifest. Do not let raw user input select arbitrary checkpoint files,
-paths, URLs, Python modules or executable code.
+guess outputs. For another architecture or provider, implement a reviewed provider that returns its expected
+aligned stereo 44.1 kHz float WAV paths; the shared worker will validate them and write the unchanged stem
+manifest. Add its fixed ID to the trusted registry rather than loading a module from metadata. Do not let raw user
+input select arbitrary checkpoint files, paths, URLs, Python modules or executable code.
 
 Compatibility is capability-driven per profile and provider, not inferred from an architecture name or a UI
 operating-system check. The current catalog keeps the existing `mlx-audio-separator` Apple Silicon execution
-path unchanged. A later phase can add a portable provider, likely `python-audio-separator`, after its supported
-backends and profiles are validated.
+path unchanged, and MLX is the only provider implemented today. The next phase can add a portable provider,
+likely `python-audio-separator`, after its supported backends and profiles are validated; no Windows or Linux
+runtime compatibility is claimed yet.
 
 Prepared-file state is intentionally narrower than total provider disk use. Each curated profile declares the
 exact checkpoint, config and/or converted MLX files that Riffroom owns beneath its configured `data/models`
