@@ -17,7 +17,13 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
-import { active, time, type Model, type Track } from "./types";
+import {
+  active,
+  time,
+  type Model,
+  type RuntimeStatus,
+  type Track,
+} from "./types";
 import Mixer from "./components/Mixer";
 import {
   ensureModelVisible,
@@ -74,6 +80,9 @@ export default function App() {
   const [modelSearch, setModelSearch] = useState("");
   const [architectureFilter, setArchitectureFilter] = useState("");
   const [visibleModelIds, setVisibleModelIds] = useState<string[] | null>(null);
+  const [portableRuntime, setPortableRuntime] = useState<RuntimeStatus | null>(
+    null,
+  );
   const fileInput = useRef<HTMLInputElement>(null);
   const track = tracks.find((t) => t.id === selectedId);
   const run = track?.runs.find((r) => r.id === (runId ?? track.active_run));
@@ -111,6 +120,12 @@ export default function App() {
         : validateVisibleModelIds(current, catalog),
     );
   }, []);
+  const refreshPortableRuntime = useCallback(async () => {
+    const status = await api<RuntimeStatus>("/runtimes/audio-separator");
+    setPortableRuntime(status);
+    if (status.error) setModelError(status.error);
+    return status;
+  }, []);
   const refresh = useCallback(async () => {
     try {
       const data = await api<Track[]>("/tracks");
@@ -135,6 +150,21 @@ export default function App() {
   useEffect(() => {
     if (visibleModelIds !== null) saveVisibleModelIds(visibleModelIds);
   }, [visibleModelIds]);
+  useEffect(() => {
+    if (openModal !== "models") return;
+    void refreshPortableRuntime().catch((e) => setModelError(e.message));
+  }, [openModal, refreshPortableRuntime]);
+  useEffect(() => {
+    if (!portableRuntime?.installing) return;
+    const timer = window.setTimeout(() => {
+      void refreshPortableRuntime()
+        .then((status) => {
+          if (status.available) return refreshModels();
+        })
+        .catch((e) => setModelError(e.message));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [portableRuntime, refreshModels, refreshPortableRuntime]);
   useEffect(() => {
     if (
       visibleModelIds !== null &&
@@ -218,6 +248,22 @@ export default function App() {
         result.visibleModelIds.includes(item.id),
       );
       if (firstVisible) setModelId(firstVisible.id);
+    }
+  }
+  async function installPortableRuntime() {
+    setModelError("");
+    try {
+      const status = await api<RuntimeStatus>(
+        "/runtimes/audio-separator/install",
+        { method: "POST" },
+      );
+      setPortableRuntime(status);
+      if (status.error) setModelError(status.error);
+      if (status.available) await refreshModels();
+    } catch (e) {
+      setModelError(
+        e instanceof Error ? e.message : "Runtime installation failed.",
+      );
     }
   }
   async function upload(file?: File) {
@@ -827,6 +873,27 @@ export default function App() {
                     </span>
                     <p>{m.license}</p>
                   </div>
+                  {m.provider === "audio-separator" &&
+                    m.compatibility.platform_supported &&
+                    !m.compatibility.runtime_available && (
+                      <div className="runtime-required" role="status">
+                        <strong>Portable runtime required</strong>
+                        <span>
+                          Installs audio-separator{" "}
+                          {portableRuntime?.version ?? "0.47.0"} in an isolated
+                          Riffroom environment.
+                        </span>
+                        <button
+                          className="small-button"
+                          disabled={portableRuntime?.installing ?? false}
+                          onClick={() => void installPortableRuntime()}
+                        >
+                          {portableRuntime?.installing
+                            ? "Installing portable runtime…"
+                            : "Install portable runtime"}
+                        </button>
+                      </div>
+                    )}
                   <div className="manager-model-actions">
                     <a href={m.source} target="_blank" rel="noreferrer">
                       Source for {m.name}

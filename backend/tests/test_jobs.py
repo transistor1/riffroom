@@ -6,6 +6,22 @@ from riffroom.jobs import Jobs
 from riffroom.store import Store
 
 
+def test_worker_environment_injects_resolved_runtime_without_overriding_admin(tmp_path, monkeypatch):
+    executable = tmp_path / "audio-separator"
+    executable.touch(mode=0o755)
+
+    class Runtime:
+        def executable(self):
+            return executable
+
+    jobs = Jobs(Store(tmp_path / "tracks"), tmp_path / "models", Runtime())
+    monkeypatch.delenv("RIFFROOM_AUDIO_SEPARATOR_BIN", raising=False)
+    assert jobs._worker_environment()["RIFFROOM_AUDIO_SEPARATOR_BIN"] == str(executable)
+
+    monkeypatch.setenv("RIFFROOM_AUDIO_SEPARATOR_BIN", "/administrator/override")
+    assert jobs._worker_environment()["RIFFROOM_AUDIO_SEPARATOR_BIN"] == "/administrator/override"
+
+
 def test_cancel_before_task_starts(tmp_path):
     async def run():
         store = Store(tmp_path)

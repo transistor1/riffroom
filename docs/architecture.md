@@ -10,7 +10,7 @@ FastAPI on 127.0.0.1:8765
                 └── cancellable Python subprocess
                         ├── trusted catalog profile → provider/runtime
                         │       ├── current production MLX inference
-                        │       └── out-of-process audio-separator bridge (not yet routed)
+                        │       └── managed audio-separator 0.47.0 venv → one MDX pilot
                         └── aligned float WAV stems + waveform peaks
 
 Browser Web Audio: shared AudioContext → one source/gain per stem
@@ -24,6 +24,10 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 - `audio.py`: FFmpeg format conversion, metadata limits, waveforms, alignment validation.
 - `store.py`: atomic manifests; each track owns its inputs and run folders.
 - `jobs.py`: one inference job at a time; process-group cancellation; error and restart recovery.
+- `runtimes.py`: discovery and atomic installation of the fixed `audio-separator[cpu]==0.47.0` portable runtime
+  in `data/runtimes/audio-separator/venv`. It honors an administrator executable override first, discovers `PATH`
+  second, and otherwise uses the managed copy. Installation uses argv-only child processes, verifies the CLI before
+  publishing the temporary runtime directory, and keeps installation state and errors in the server process.
 - `models.py`: provider-aware declarative catalog consumed by the UI. The curated layer is static. The community
   layer reads only the pinned runtime's bundled `models.json` and `models-scores.json`, admits entries with an
   explicit non-empty stem list, and derives opaque SHA-256-based IDs. Profiles describe architecture, runtime
@@ -31,9 +35,10 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
   The API computes compatibility and prepared-file state without changing inference dispatch.
 - `providers/`: the trusted separation-provider boundary. `base.py` defines separation and runtime-availability,
   `__init__.py` resolves provider IDs through an explicit server-owned registry, and `mlx.py` owns the current
-  production `mlx-audio-separator` runtime. `audio_separator.py` is an out-of-process bridge to a separately
-  installed `audio-separator` executable selected only by server configuration or `PATH`; no catalog model routes
-  to it yet. Provider IDs never name an importable module, class or executable path.
+  production `mlx-audio-separator` runtime. `audio_separator.py` is an out-of-process bridge to the fixed portable
+  executable resolved from administrator configuration, `PATH`, or the managed runtime. Only
+  `UVR-MDX-NET-Inst_HQ_5.onnx` routes through it. Provider IDs never name an importable module, class or executable
+  path.
 - `separator.py`: low-level adapter for the pinned MLX runtime. It provides atomic downloads, a project-local
   Demucs conversion cache and the dedicated guitar profile behavior used by the MLX provider.
 - `demucs_cache.py`: strict restoration of native MLX parameter paths, correcting the pinned upstream cached-weight loading bug.
@@ -61,9 +66,23 @@ input select arbitrary checkpoint files, paths, URLs, Python modules or executab
 
 Compatibility is capability-driven per profile and provider, not inferred from an architecture name or a UI
 operating-system check. The current catalog keeps the existing `mlx-audio-separator` Apple Silicon execution
-path unchanged. A fixed `audio-separator` provider ID now exposes availability and an argv-only subprocess bridge,
-but no catalog profile selects it. Managed installation, validated profiles and model routing are the next slice;
-no Windows or Linux runtime compatibility is claimed yet.
+path unchanged. The `audio-separator` provider is available only when its administrator override, `PATH` command,
+or managed CLI resolves successfully. Platform support and runtime readiness are separate API fields: on a
+supported host the portable pilot remains visible in Model Manager as **Runtime required** but is excluded from
+normal selectors until the runtime is ready. The user must explicitly start the large install; opening Model
+Manager never installs software. Windows and Linux venv layouts are handled by the installer, but Riffroom setup,
+the pilot profile, and end-to-end validation remain `macos-arm64` only in this phase.
+
+The install endpoint accepts no package, version, executable, or provider input. It always creates a temporary
+venv with the running Riffroom Python, installs exactly `audio-separator[cpu]==0.47.0`, and installs the pinned
+package's pilot-required dependencies separately. The single MDX/ONNX pilot does not install `diffq`, whose source
+build requires a local compiler because it has no Apple Silicon wheel, or `samplerate==0.1.0`, whose wheel bundles
+an x86_64-only library. Neither package is imported by the pilot path. The installer checks the expected CLI with
+`--help` and atomically promotes the directory. A failure removes the temporary directory without replacing an
+existing runtime, and exposes only a bounded, path-free failure category. App shutdown cancels an in-progress
+installer subprocess. Jobs pass a server-resolved executable to workers through
+`RIFFROOM_AUDIO_SEPARATOR_BIN` only when the process environment does not already contain an explicit
+administrator override; global `PATH` is not changed.
 
 Prepared-file state is intentionally narrower than total provider disk use. Each curated profile declares the
 exact checkpoint, config and/or converted MLX files that Riffroom owns beneath its configured `data/models`
@@ -76,6 +95,10 @@ shared provider metadata (`download_checks.json`, `vr_model_data.json`, `mdx_mod
 caches such as `data/models/torch` / `TORCH_HOME`. In particular,
 removing Demucs prepared files may leave upstream Torch downloads on disk even though the next use converts the
 model again.
+
+The portable pilot is deliberately excluded from model-specific cache accounting and removal. The upstream
+runtime can own additional registry and model files that are not completely enumerated by Riffroom, so partial
+cleanup would be misleading and unsafe.
 
 A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The mixer accepts arbitrary names; add display labels/icons and choose how the guitar presets target the new names.
 

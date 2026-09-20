@@ -131,6 +131,11 @@ CURATED_MODELS = {
 
 COMMUNITY_ORIGIN = "mlx-audio-separator 0.1.7 bundled models.json + models-scores.json"
 RUNTIME_SOURCE = "https://github.com/ssmall256/mlx-audio-separator"
+PORTABLE_PILOT_FILENAME = "UVR-MDX-NET-Inst_HQ_5.onnx"
+PORTABLE_PILOT_ORIGIN = (
+    "audio-separator 0.47.0 portable pilot; stems from mlx-audio-separator 0.1.7 bundled metadata"
+)
+PORTABLE_RUNTIME_SOURCE = "https://github.com/nomadkaraoke/python-audio-separator"
 COMMUNITY_ARCHITECTURES = {
     "vr_download_list": "VR",
     "mdx_download_list": "MDX",
@@ -228,6 +233,7 @@ def community_profiles_from_metadata(
     profiles = []
     for candidate in unique.values():
         cache_files = candidate["cache_files"]
+        portable_pilot = candidate["filename"] == PORTABLE_PILOT_FILENAME
         profiles.append(
             ModelProfile(
                 id=community_model_id(candidate["filename"]),
@@ -235,21 +241,28 @@ def community_profiles_from_metadata(
                 filename=candidate["filename"],
                 stems=candidate["stems"],
                 description=(
-                    "A trusted community checkpoint exposed by the pinned local runtime. "
+                    "The first portable runtime pilot, executed by audio-separator 0.47.0. "
+                    "Review its results and checkpoint terms before relying on it."
+                    if portable_pilot
+                    else "A trusted community checkpoint exposed by the pinned local runtime. "
                     "Review its results and checkpoint terms before relying on it."
                 ),
                 badge="Community",
                 license="Checkpoint terms unverified; the runtime code license does not cover these weights.",
-                source=RUNTIME_SOURCE,
-                provider="mlx-audio-separator",
+                source=PORTABLE_RUNTIME_SOURCE if portable_pilot else RUNTIME_SOURCE,
+                provider="audio-separator" if portable_pilot else "mlx-audio-separator",
                 architecture=candidate["architecture"],
                 supported_platforms=("macos-arm64",),
                 terms_status="unverified",
-                cache_files=cache_files,
+                cache_files=() if portable_pilot else cache_files,
                 curated=False,
-                catalog_origin=COMMUNITY_ORIGIN,
+                catalog_origin=PORTABLE_PILOT_ORIGIN if portable_pilot else COMMUNITY_ORIGIN,
                 catalog_group="community",
-                cache_cleanup_supported=all(cache_owners[item] == 1 for item in cache_files),
+                cache_cleanup_supported=(
+                    False
+                    if portable_pilot
+                    else all(cache_owners[item] == 1 for item in cache_files)
+                ),
             )
         )
     return tuple(profiles)
@@ -334,7 +347,7 @@ def model_cache_state(model: ModelProfile, cache_root: Path) -> dict:
             sizes.append(metadata.st_size)
             if path in paths and metadata.st_size > 0:
                 complete.append(path)
-    prepared = len(complete) == len(paths)
+    prepared = bool(paths) and len(complete) == len(paths)
     return {
         "prepared": prepared,
         "cache_bytes": sum(sizes),
@@ -359,7 +372,7 @@ def clear_model_cache(model: ModelProfile, cache_root: Path) -> None:
             path.unlink()
 
 
-def catalog(cache_root: Path):
+def catalog(cache_root: Path, *, audio_separator_available: bool = False):
     platform_key = current_platform_key()
     platform_name = PLATFORM_NAMES.get(platform_key, platform_key)
     result = []
@@ -367,12 +380,20 @@ def catalog(cache_root: Path):
         item = asdict(model)
         item.pop("cache_files")
         item.pop("cache_cleanup_supported")
-        compatible = platform_key in model.supported_platforms
+        platform_supported = platform_key in model.supported_platforms
+        runtime_available = model.provider != "audio-separator" or audio_separator_available
+        compatible = platform_supported and runtime_available
+        if platform_supported and not runtime_available:
+            label = f"Runtime required · {platform_name}"
+        else:
+            label = f"{'Compatible' if compatible else 'Unavailable'} · {platform_name}"
         item["compatibility"] = {
             "platform_key": platform_key,
             "platform_name": platform_name,
+            "platform_supported": platform_supported,
+            "runtime_available": runtime_available,
             "compatible": compatible,
-            "label": f"{'Compatible' if compatible else 'Unavailable'} · {platform_name}",
+            "label": label,
         }
         item.update(model_cache_state(model, cache_root))
         result.append(item)

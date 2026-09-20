@@ -19,6 +19,111 @@ test.afterEach(async ({ page }) => {
   );
 });
 
+test("portable pilot requires explicit runtime install before use", async ({
+  page,
+}) => {
+  let available = false;
+  let installing = false;
+  let installAttempts = 0;
+  let runtimeError: string | null = null;
+
+  await page.route("**/api/runtimes/audio-separator", async (route) => {
+    if (installing) {
+      installing = false;
+      if (installAttempts === 1) {
+        runtimeError =
+          "Portable runtime installation failed while installing the pinned package.";
+      } else {
+        available = true;
+        runtimeError = null;
+      }
+    }
+    await route.fulfill({
+      json: {
+        id: "audio-separator",
+        display_name: "Portable audio-separator runtime",
+        version: "0.47.0",
+        available,
+        managed_installed: available,
+        installing,
+        error: runtimeError,
+      },
+    });
+  });
+  await page.route("**/api/runtimes/audio-separator/install", async (route) => {
+    installAttempts += 1;
+    installing = true;
+    runtimeError = null;
+    await route.fulfill({
+      status: 202,
+      json: {
+        id: "audio-separator",
+        display_name: "Portable audio-separator runtime",
+        version: "0.47.0",
+        available: false,
+        managed_installed: false,
+        installing: true,
+        error: null,
+      },
+    });
+  });
+  await page.route("**/api/models", async (route) => {
+    const response = await route.fetch();
+    const models = (await response.json()) as Array<{
+      provider: string;
+      compatibility: {
+        platform_supported: boolean;
+        runtime_available: boolean;
+        compatible: boolean;
+        label: string;
+      };
+    }>;
+    for (const model of models) {
+      if (model.provider !== "audio-separator") continue;
+      model.compatibility.platform_supported = true;
+      model.compatibility.runtime_available = available;
+      model.compatibility.compatible = available;
+      model.compatibility.label = available
+        ? "Compatible · macOS (Apple Silicon)"
+        : "Runtime required · macOS (Apple Silicon)";
+    }
+    await route.fulfill({ response, json: models });
+  });
+
+  await page.reload();
+  await page.getByRole("button", { name: "Model manager" }).click();
+  const manager = page.getByRole("dialog", { name: "Model manager" });
+  await manager.getByRole("button", { name: "Community" }).click();
+  await manager.getByLabel("Search models").fill("UVR-MDX-NET Inst HQ 5");
+  const pilot = manager.locator(".manager-model").filter({
+    has: manager.getByRole("heading", {
+      name: "MDX-Net Model: UVR-MDX-NET Inst HQ 5",
+    }),
+  });
+
+  await expect(pilot.getByText("Portable runtime required")).toBeVisible();
+  await expect(pilot.getByRole("button", { name: "Use model" })).toHaveCount(0);
+  await pilot.getByRole("button", { name: "Install portable runtime" }).click();
+  await expect(
+    pilot.getByRole("button", { name: "Installing portable runtime…" }),
+  ).toBeVisible();
+  await expect(
+    manager.getByText(
+      "Portable runtime installation failed while installing the pinned package.",
+    ),
+  ).toBeVisible({ timeout: 5_000 });
+  await pilot.getByRole("button", { name: "Install portable runtime" }).click();
+  await expect(
+    pilot.getByRole("button", { name: "Installing portable runtime…" }),
+  ).toBeVisible();
+  await expect(
+    pilot.getByText("Compatible · macOS (Apple Silicon)"),
+  ).toBeVisible({ timeout: 5_000 });
+  await pilot.getByRole("button", { name: "Use model" }).click();
+  await expect(manager).toBeHidden();
+  await expect(page.getByText("Selected from Model Manager")).toBeVisible();
+});
+
 test("import, real separation, mixing, looping, model comparison and removal", async ({
   page,
   request,

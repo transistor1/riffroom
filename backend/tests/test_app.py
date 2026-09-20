@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
@@ -20,7 +21,9 @@ from riffroom.models import (
 
 @pytest.fixture
 def application(tmp_path, monkeypatch):
+    monkeypatch.delenv("RIFFROOM_AUDIO_SEPARATOR_BIN", raising=False)
     app = create_app(tmp_path, tmp_path / "no-frontend")
+    app.state.audio_separator_runtime._executable_resolver = lambda name: None
     started = []
     monkeypatch.setattr(app.state.jobs, "start", lambda tid, model: started.append((tid, model)))
     app.state.started = started
@@ -55,7 +58,10 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         "demucs-ft",
     ]
     assert len(models) > 4
-    assert {model["provider"] for model in models} == {"mlx-audio-separator"}
+    assert {model["provider"] for model in models} == {
+        "audio-separator",
+        "mlx-audio-separator",
+    }
     assert {"Demucs", "RoFormer", "MDXC"} <= {model["architecture"] for model in models}
     assert {model["terms_status"] for model in models} == {
         "open",
@@ -65,13 +71,21 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
     for model in models:
         assert model["supported_platforms"] == ["macos-arm64"]
         platform_key = current_platform_key()
-        expected_compatibility = platform_key in model["supported_platforms"]
+        platform_supported = platform_key in model["supported_platforms"]
+        expected_compatibility = platform_supported and model["provider"] != "audio-separator"
         assert model["compatibility"]["platform_key"] == platform_key
         assert model["compatibility"]["platform_name"]
+        assert model["compatibility"]["platform_supported"] is platform_supported
+        assert model["compatibility"]["runtime_available"] is (model["provider"] != "audio-separator")
         assert model["compatibility"]["compatible"] is expected_compatibility
-        assert model["compatibility"]["label"].startswith(
-            "Compatible" if expected_compatibility else "Unavailable"
+        expected_label = (
+            "Runtime required"
+            if platform_supported and model["provider"] == "audio-separator"
+            else "Compatible"
+            if expected_compatibility
+            else "Unavailable"
         )
+        assert model["compatibility"]["label"].startswith(expected_label)
         assert model["prepared"] is False
         assert model["cache_bytes"] == 0
         assert model["cache_label"] == "Downloads on first use"
@@ -85,7 +99,84 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         assert model["catalog_group"] == "community"
         assert model["terms_status"] == "unverified"
         assert "Checkpoint terms unverified" in model["license"]
-        assert model["catalog_origin"].startswith("mlx-audio-separator 0.1.7 bundled")
+        if model["provider"] == "audio-separator":
+            assert model["catalog_origin"].startswith("audio-separator 0.47.0 portable pilot")
+        else:
+            assert model["catalog_origin"].startswith("mlx-audio-separator 0.1.7 bundled")
+
+
+def test_portable_pilot_routing_cleanup_and_runtime_compatibility(application):
+    app, client = application
+    pilot = next(model for model in MODELS.values() if model.filename == "UVR-MDX-NET-Inst_HQ_5.onnx")
+
+    assert pilot.name == "MDX-Net Model: UVR-MDX-NET Inst HQ 5"
+    assert pilot.provider == "audio-separator"
+    assert pilot.stems == ("instrumental", "vocals")
+    assert pilot.supported_platforms == ("macos-arm64",)
+    assert pilot.cache_cleanup_supported is False
+    assert all(
+        model.provider == "mlx-audio-separator"
+        for model in MODELS.values()
+        if model.filename != pilot.filename
+    )
+    cleanup = client.delete(f"/api/models/{pilot.id}/cache")
+    assert cleanup.status_code == 409
+    assert "portable model" in cleanup.json()["detail"]
+
+    unavailable = {item["id"]: item for item in client.get("/api/models").json()}[pilot.id]
+    if unavailable["compatibility"]["platform_supported"]:
+        assert unavailable["compatibility"]["compatible"] is False
+        assert unavailable["compatibility"]["label"].startswith("Runtime required")
+
+    executable = app.state.audio_separator_runtime.runtime / "venv" / "bin" / "audio-separator"
+    executable.parent.mkdir(parents=True)
+    executable.touch(mode=0o755)
+    (app.state.audio_separator_runtime.runtime / "VERSION").write_text("0.47.0")
+    available = {item["id"]: item for item in client.get("/api/models").json()}[pilot.id]
+    assert available["compatibility"]["compatible"] is available["compatibility"]["platform_supported"]
+
+
+def test_runtime_status_and_install_endpoints_do_not_expose_paths(tmp_path):
+    app = create_app(tmp_path, tmp_path / "none")
+    calls = []
+    app.state.audio_separator_runtime._executable_resolver = lambda name: None
+
+    def runner(argv, **kwargs):
+        calls.append(argv)
+        if argv[1:3] == ["-m", "venv"]:
+            venv = Path(argv[-1])
+            for executable in (
+                venv / "bin" / "python",
+                venv / "bin" / "audio-separator",
+            ):
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_text("#!/usr/bin/env python3\n")
+                executable.chmod(0o755)
+        return type("Result", (), {"returncode": 0})()
+
+    app.state.audio_separator_runtime._runner = runner
+    with TestClient(app) as client:
+        initial = client.get("/api/runtimes/audio-separator")
+        assert initial.status_code == 200
+        assert set(initial.json()) == {
+            "id",
+            "display_name",
+            "version",
+            "available",
+            "managed_installed",
+            "installing",
+            "error",
+        }
+        response = client.post("/api/runtimes/audio-separator/install")
+        assert response.status_code == 202
+        for _ in range(100):
+            status = client.get("/api/runtimes/audio-separator").json()
+            if not status["installing"]:
+                break
+        assert status["available"] is True
+        assert status["managed_installed"] is True
+        assert str(tmp_path) not in str(status)
+    assert len(calls) == 5
 
 
 def test_curated_profiles_are_unchanged_and_community_order_is_deterministic(application):
@@ -148,15 +239,11 @@ def test_only_trusted_community_ids_can_start_separation(application):
     track = upload(client)
     community = next(iter(COMMUNITY_MODELS.values()))
 
-    response = client.post(
-        f"/api/tracks/{track['id']}/separate", json={"model_id": community.id}
-    )
+    response = client.post(f"/api/tracks/{track['id']}/separate", json={"model_id": community.id})
     assert response.status_code == 202
     assert app.state.started[-1] == (track["id"], community.id)
 
-    response = client.post(
-        f"/api/tracks/{track['id']}/separate", json={"model_id": community.filename}
-    )
+    response = client.post(f"/api/tracks/{track['id']}/separate", json={"model_id": community.filename})
     assert response.status_code == 400
     assert response.json() == {"detail": "Unknown separation model."}
 
@@ -194,9 +281,7 @@ def test_model_cache_state_and_safe_idempotent_cleanup(application):
 
     models = {model["id"]: model for model in client.get("/api/models").json()}
     assert models["demucs-6"]["prepared"] is True
-    assert models["demucs-6"]["cache_bytes"] == sum(
-        path.stat().st_size for path in [*target_assets, partial]
-    )
+    assert models["demucs-6"]["cache_bytes"] == sum(path.stat().st_size for path in [*target_assets, partial])
     assert models["demucs-6"]["cache_label"] == "Prepared"
     assert models["guitar-focus"]["prepared"] is True
 
@@ -206,9 +291,7 @@ def test_model_cache_state_and_safe_idempotent_cleanup(application):
     original = app.state.store.directory(track["id"]) / "original.wav"
     stem = app.state.store.directory(track["id"]) / "runs" / run_id / "guitar.wav"
     original_bytes, stem_bytes = original.read_bytes(), stem.read_bytes()
-    app.state.store.update(
-        track["id"], status="queued", pending_model="demucs-6"
-    )
+    app.state.store.update(track["id"], status="queued", pending_model="demucs-6")
 
     response = client.delete("/api/models/demucs-6/cache")
     assert response.status_code == 409
@@ -281,7 +364,11 @@ def test_delete_unknown_model_cache_returns_404(application):
 
 def test_shared_community_config_cannot_be_removed(application):
     app, client = application
-    model = next(model for model in COMMUNITY_MODELS.values() if not model.cache_cleanup_supported)
+    model = next(
+        model
+        for model in COMMUNITY_MODELS.values()
+        if not model.cache_cleanup_supported and model.provider == "mlx-audio-separator"
+    )
     assets = write_model_assets(app.state.jobs.cache, model.id)
 
     response = client.delete(f"/api/models/{model.id}/cache")

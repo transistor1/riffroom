@@ -15,6 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from riffroom.audio import decode, waveform
 from riffroom.jobs import ACTIVE, Jobs
 from riffroom.models import MODELS, catalog, clear_model_cache
+from riffroom.runtimes import AudioSeparatorRuntime
 from riffroom.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +29,8 @@ class SeparationRequest(BaseModel):
 
 def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
     store = Store(data / "tracks")
-    jobs = Jobs(store, data / "models")
+    runtime = AudioSeparatorRuntime(data)
+    jobs = Jobs(store, data / "models", runtime)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -43,9 +45,10 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
                 )
         yield
         await jobs.close()
+        await runtime.close()
 
     app = FastAPI(title="Riffroom", lifespan=lifespan)
-    app.state.store, app.state.jobs = store, jobs
+    app.state.store, app.state.jobs, app.state.audio_separator_runtime = store, jobs, runtime
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
 
     @app.middleware("http")
@@ -69,7 +72,15 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
 
     @app.get("/api/models")
     def models():
-        return catalog(jobs.cache)
+        return catalog(jobs.cache, audio_separator_available=runtime.status()["available"] is True)
+
+    @app.get("/api/runtimes/audio-separator")
+    def audio_separator_runtime_status():
+        return runtime.status()
+
+    @app.post("/api/runtimes/audio-separator/install", status_code=202)
+    async def install_audio_separator_runtime():
+        return runtime.start_install()
 
     @app.delete("/api/models/{model_id}/cache", status_code=204)
     def delete_model_cache(model_id: str):
@@ -77,7 +88,12 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
         if model is None:
             raise HTTPException(404, "Separation model not found.")
         if not model.cache_cleanup_supported:
-            raise HTTPException(409, "Prepared-file cleanup is unavailable for this shared model config.")
+            detail = (
+                "Prepared-file cleanup is unavailable for this portable model."
+                if model.provider == "audio-separator"
+                else "Prepared-file cleanup is unavailable for this shared model config."
+            )
+            raise HTTPException(409, detail)
         with store.lock:
             in_use = any(
                 track.get("status") in ACTIVE and track.get("pending_model") == model_id

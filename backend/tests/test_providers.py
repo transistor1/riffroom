@@ -125,8 +125,13 @@ def test_audio_separator_cli_contract_and_normalized_outputs(tmp_path):
     assert argv[argv.index("--output_dir") + 1] == str(output)
     assert argv[argv.index("--model_file_dir") + 1] == str(cache)
     assert argv[argv.index("--output_format") + 1] == "WAV"
-    assert argv[argv.index("--normalization_threshold") + 1] == "1.0"
-    assert argv[argv.index("--amplification_threshold") + 1] == "0.0"
+    # audio-separator 0.47.0's Python API uses the *_threshold names, but its
+    # CLI exposes the shorter option names. Passing the API names exits 2
+    # during argument parsing before the model can load.
+    assert argv[argv.index("--normalization") + 1] == "1.0"
+    assert argv[argv.index("--amplification") + 1] == "0.0"
+    assert "--normalization_threshold" not in argv
+    assert "--amplification_threshold" not in argv
     assert "--use_soundfile" in argv
     assert json.loads(argv[argv.index("--custom_output_names") + 1]) == {
         "guitar": "guitar",

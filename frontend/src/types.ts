@@ -37,9 +37,20 @@ export type Model = {
   compatibility: {
     platform_key: string;
     platform_name: string;
+    platform_supported: boolean;
+    runtime_available: boolean;
     compatible: boolean;
     label: string;
   };
+};
+export type RuntimeStatus = {
+  id: "audio-separator";
+  display_name: string;
+  version: string;
+  available: boolean;
+  managed_installed: boolean;
+  installing: boolean;
+  error: string | null;
 };
 export type Channel = { volume: number; muted: boolean; solo: boolean };
 export type Mix = Record<string, Channel>;

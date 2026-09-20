@@ -7,17 +7,29 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
+from riffroom.runtimes import AUDIO_SEPARATOR_ENV, AudioSeparatorRuntime
 from riffroom.store import Store
 
 ACTIVE = {"queued", "processing"}
 
 
 class Jobs:
-    def __init__(self, store: Store, cache: Path):
+    def __init__(
+        self, store: Store, cache: Path, runtime: AudioSeparatorRuntime | None = None
+    ):
         self.store, self.cache = store, cache
+        self.runtime = runtime
         self.slots = asyncio.Semaphore(1)
         self.tasks: dict[str, asyncio.Task] = {}
         self.processes: dict[str, asyncio.subprocess.Process] = {}
+
+    def _worker_environment(self) -> dict[str, str]:
+        environment = {**os.environ, "PYTHONUNBUFFERED": "1"}
+        if AUDIO_SEPARATOR_ENV not in environment and self.runtime is not None:
+            executable = self.runtime.executable()
+            if executable is not None:
+                environment[AUDIO_SEPARATOR_ENV] = str(executable)
+        return environment
 
     def start(self, track_id: str, model_id: str):
         if track_id in self.tasks:
@@ -48,7 +60,7 @@ class Jobs:
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.STDOUT,
                             start_new_session=True,
-                            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                            env=self._worker_environment(),
                             limit=1024 * 1024,
                         )
                     )
