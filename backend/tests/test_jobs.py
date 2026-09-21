@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from riffroom.jobs import Jobs
-from riffroom.models import PORTABLE_PILOT_FILENAME, community_model_id
+from riffroom.models import PORTABLE_DRUMSEP_FILENAME, community_model_id
 from riffroom.store import Store
 
 
@@ -124,15 +124,15 @@ def test_successful_job_stores_resolved_provider_id(tmp_path, monkeypatch):
         assert run_metadata["provider_id"] == "mlx-audio-separator"
         assert spawned[0][6:] == ("demucs-6", "mlx-audio-separator")
 
-        pilot_track = uuid4().hex
-        store.put({"id": pilot_track, "status": "idle", "runs": [], "created_at": "now"})
-        pilot_id = community_model_id(PORTABLE_PILOT_FILENAME)
-        jobs.start(pilot_track, pilot_id)
-        await jobs.tasks[pilot_track]
+        portable_track = uuid4().hex
+        store.put({"id": portable_track, "status": "idle", "runs": [], "created_at": "now"})
+        portable_id = community_model_id(PORTABLE_DRUMSEP_FILENAME)
+        jobs.start(portable_track, portable_id)
+        await jobs.tasks[portable_track]
 
-        pilot_run = store.get(pilot_track)["runs"][0]
-        assert pilot_run["model_id"] == pilot_id
-        assert pilot_run["provider_id"] == "audio-separator"
-        assert spawned[1][6:] == (pilot_id, "audio-separator")
+        portable_run = store.get(portable_track)["runs"][0]
+        assert portable_run["model_id"] == portable_id
+        assert portable_run["provider_id"] == "audio-separator"
+        assert spawned[1][6:] == (portable_id, "audio-separator")
 
     asyncio.run(run())

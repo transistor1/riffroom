@@ -10,7 +10,7 @@ FastAPI on 127.0.0.1:8765
                 └── cancellable Python subprocess
                         ├── logical model → ordered trusted execution variants
                         │       ├── production MLX inference for validated profiles
-                        │       └── managed audio-separator 0.47.0 venv → one MDX pilot
+                        │       └── managed audio-separator 0.47.0 venv → explicit 3-model allowlist
                         └── aligned float WAV stems + waveform peaks
 
 Browser Web Audio: shared AudioContext → one source/gain per stem
@@ -38,8 +38,10 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 - `providers/`: the trusted separation-provider boundary. `base.py` defines separation and runtime-availability,
   `__init__.py` resolves provider IDs through an explicit server-owned registry, and `mlx.py` owns the current
   production `mlx-audio-separator` runtime. `audio_separator.py` is an out-of-process bridge to the fixed portable
-  executable resolved from administrator configuration, `PATH`, or the managed runtime. Only
-  `UVR-MDX-NET-Inst_HQ_5.onnx` is the only portable pilot. Provider IDs never name an importable module, class
+  executable resolved from administrator configuration, `PATH`, or the managed runtime. Portable routing is limited
+  to an explicit server-owned table containing `UVR-MDX-NET-Inst_HQ_5.onnx`,
+  `MDX23C-DrumSep-aufr33-jarredou.ckpt`, and
+  `mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt`. Provider IDs never name an importable module, class
   or executable path.
 - `separator.py`: low-level adapter for the pinned MLX runtime. It provides atomic downloads, a project-local
   Demucs conversion cache and the dedicated guitar profile behavior used by the MLX provider.
@@ -71,20 +73,22 @@ manifest. Add its fixed ID to the trusted registry rather than loading a module 
 input select arbitrary checkpoint files, paths, URLs, Python modules or executable code.
 
 Compatibility is capability-driven across a profile's validated variants, not inferred from an architecture name
-or a UI operating-system check. Existing production profiles keep their `mlx-audio-separator` Apple Silicon
-execution paths. The pilot is currently validated only through `audio-separator`; its presence in MLX's bundled
-registry is not treated as runtime proof. The portable provider is available only when its administrator override,
-`PATH` command, or managed CLI resolves successfully. Until then the pilot remains visible in Model Manager as
-**Runtime required**, stays out of normal selectors, and offers the portable installer. The user must explicitly
+or a UI operating-system check. Existing non-portable production profiles keep their `mlx-audio-separator` Apple
+Silicon execution paths. The three portable-routed profiles are validated only through `audio-separator`; presence
+in MLX's bundled registry is not treated as runtime proof. The allowlist grows only after the fixed managed runtime
+successfully separates generated audio and produces every trusted expected stem as a readable WAV. The portable
+provider is available only when its administrator override, `PATH` command, or managed CLI resolves successfully.
+Until then each portable-only row remains visible in Model Manager as **Runtime required**, stays out of normal
+selectors, and offers the portable installer. The user must explicitly
 start the large install; opening Model Manager never installs software. Windows and Linux venv layouts are handled
-by the installer, but Riffroom setup, the pilot profile, and end-to-end validation remain `macos-arm64` only in
+by the installer, but Riffroom setup, the portable profiles, and end-to-end validation remain `macos-arm64` only in
 this phase.
 
 The install endpoint accepts no package, version, executable, or provider input. It always creates a temporary
 venv with the running Riffroom Python, installs exactly `audio-separator[cpu]==0.47.0`, and installs the pinned
-package's pilot-required dependencies separately. The single MDX/ONNX pilot does not install `diffq`, whose source
+package's allowlist-required dependencies separately. The validated portable paths do not install `diffq`, whose source
 build requires a local compiler because it has no Apple Silicon wheel, or `samplerate==0.1.0`, whose wheel bundles
-an x86_64-only library. Neither package is imported by the pilot path. The installer checks the expected CLI with
+an x86_64-only library. Neither package is imported by the allowlisted paths. The installer checks the expected CLI with
 `--help` and atomically promotes the directory. A failure removes the temporary directory without replacing an
 existing runtime, and exposes only a bounded, path-free failure category. App shutdown cancels an in-progress
 installer subprocess. Jobs pass a server-resolved executable to workers through
@@ -103,7 +107,7 @@ caches such as `data/models/torch` / `TORCH_HOME`. In particular,
 removing Demucs prepared files may leave upstream Torch downloads on disk even though the next use converts the
 model again.
 
-The portable pilot is deliberately excluded from model-specific cache accounting and removal. The portable
+Portable-routed community models are deliberately excluded from model-specific cache accounting and removal. The portable
 runtime can own additional registry and model files that are not completely enumerated by Riffroom, so partial
 cleanup would be misleading and unsafe.
 

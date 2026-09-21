@@ -19,30 +19,34 @@ test.afterEach(async ({ page }) => {
   );
 });
 
-test("portable pilot appears once and does not advertise unvalidated MLX", async ({
+test("portable allowlist models appear once without unvalidated MLX", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Model manager" }).click();
   const manager = page.getByRole("dialog", { name: "Model manager" });
   await manager.getByRole("button", { name: "Community" }).click();
-  await manager.getByLabel("Search models").fill("UVR-MDX-NET Inst HQ 5");
-  const pilot = manager.locator(".manager-model").filter({
-    has: manager.getByRole("heading", {
-      name: "MDX-Net Model: UVR-MDX-NET Inst HQ 5",
-    }),
-  });
+  for (const modelName of [
+    "MDX-Net Model: UVR-MDX-NET Inst HQ 5",
+    "MDX23C Model: MDX23C DrumSep by aufr33-jarredou",
+    "Roformer Model: Mel-Roformer-Karaoke-Aufr33-Viperx",
+  ]) {
+    await manager.getByLabel("Search models").fill(modelName);
+    const card = manager.locator(".manager-model").filter({
+      has: manager.getByRole("heading", { name: modelName }),
+    });
 
-  await expect(pilot).toHaveCount(1);
-  await expect(pilot.getByText("mlx-audio-separator")).toHaveCount(0);
-  await expect(
-    pilot
-      .locator("dl > div")
-      .filter({ hasText: "Provider / runtime" })
-      .locator("code"),
-  ).toHaveText(/^(audio-separator|No runtime available)$/);
+    await expect(card).toHaveCount(1);
+    await expect(card.getByText("mlx-audio-separator")).toHaveCount(0);
+    await expect(
+      card
+        .locator("dl > div")
+        .filter({ hasText: "Provider / runtime" })
+        .locator("code"),
+    ).toHaveText(/^(audio-separator|No runtime available)$/);
+  }
 });
 
-test("portable pilot offers install only when no variant is usable", async ({
+test("portable-only model offers install only when no variant is usable", async ({
   page,
 }) => {
   let available = false;

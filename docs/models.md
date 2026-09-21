@@ -41,12 +41,19 @@ precedence if a generated catalog entry ever collides.
 
 All profiles support `macos-arm64`. A logical profile owns its model ID and user-facing metadata once, plus an
 ordered tuple of explicitly validated execution variants. Ordinary profiles have one `mlx-audio-separator`
-variant. The portable pilot, **MDX-Net Model: UVR-MDX-NET Inst HQ 5**
-(`UVR-MDX-NET-Inst_HQ_5.onnx`), has one validated `audio-separator` 0.47.0 variant and remains one catalog row with
-the same model ID. It produces exactly the Instrumental and Vocals stems declared by the trusted bundled metadata.
-Its checkpoint terms remain unverified. Although the filename also appears in MLX's bundled registry, the MLX
-conversion/cache path is not considered validated for this logical model. No other curated or community filename
-is routed to the portable provider. The server chooses the first validated, host-capable variant whose hard-coded
+variant. Portable routing is a server-owned allowlist, not a consequence of appearing in either runtime's
+registry. The `audio-separator` 0.47.0 allowlist contains exactly these execution-validated filenames:
+
+- `UVR-MDX-NET-Inst_HQ_5.onnx`: Instrumental and Vocals.
+- `MDX23C-DrumSep-aufr33-jarredou.ckpt`: Kick, Snare, Toms, HH, Ride and Crash.
+- `mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt`: Vocals and Instrumental.
+
+Each remains one logical community catalog row with its existing generated model ID and has only a validated
+`audio-separator` variant. Its checkpoint terms remain unverified. The two additions were run through the managed
+runtime on a generated six-second stereo WAV; the CLI exited successfully and every stem declared by the trusted
+bundled metadata was produced as a readable stereo WAV. Registry presence alone did not qualify any model, and no
+other curated or community filename is routed to the portable provider. MLX variants are not inferred for these
+logical models from MLX registry presence. The server chooses the first validated, host-capable variant whose hard-coded
 provider runtime is available. It freezes that provider for the job invocation and records the provider ID in new
 run metadata; it never silently falls back after execution begins. A later retry resolves again. Existing history
 without a provider ID remains valid. Model metadata cannot supply a Python module, class or executable path.
@@ -66,18 +73,18 @@ explicit portable runtime installation described below; it does not preload mode
 The portable runtime is isolated from Riffroom's pinned MLX environment at
 `data/runtimes/audio-separator/venv`. Installation is an explicit Model Manager action and always installs exactly
 `audio-separator[cpu]==0.47.0`; the main project dependency and lock files do not include it. Riffroom installs the
-dependencies required by the single MDX/ONNX pilot separately, omitting the unused `diffq` source build and the
+dependencies required by the validated portable paths separately, omitting the unused `diffq` source build and the
 unused, x86_64-only library bundled by `samplerate==0.1.0`. Riffroom creates a temporary venv with its running
 Python, installs and verifies the expected CLI with argv-only subprocesses, then atomically promotes it. A valid
 `RIFFROOM_AUDIO_SEPARATOR_BIN` administrator override takes precedence, followed by `PATH`, then the managed copy.
 Package names, versions, executable paths and provider classes are not accepted from HTTP or model metadata.
 
 Catalog compatibility separates host capability from runtime readiness and computes both across validated
-variants only. On Apple Silicon the pilot selects `audio-separator` when the portable runtime is ready. Otherwise
-the same row stays browsable as **Runtime required · macOS (Apple Silicon)**, normal selectors exclude it, and
+variants only. On Apple Silicon each allowlisted model selects `audio-separator` when the portable runtime is ready. Otherwise
+its row stays browsable as **Runtime required · macOS (Apple Silicon)**, normal selectors exclude it, and
 Model Manager offers the explicit portable installer. Installation is never triggered by page load, opening Model
 Manager, or selecting a tab. The installer has portable POSIX/Windows venv path handling, but Riffroom setup and
-this model's declared/validated support remain Apple Silicon macOS only; Windows and Linux setup and validation
+these models' declared/validated support remain Apple Silicon macOS only; Windows and Linux setup and validation
 are future work.
 
 ## Current Apple Silicon runtime
@@ -118,9 +125,9 @@ Riffroom's configured model root. Cleanup is disabled when an eligible checkpoin
 another bundled registry entry. Shared provider metadata such as `download_checks.json`, `vr_model_data.json` and
 `mdx_model_data.json` is never attributed to one model and is never removed by Model Manager.
 
-Model-specific prepared-file reporting and cleanup are disabled for the portable pilot. `audio-separator` may own
+Model-specific prepared-file reporting and cleanup are disabled for every portable-routed community model. `audio-separator` may own
 additional registry and download artifacts that this slice cannot completely enumerate. Riffroom therefore does
-not pretend that deleting the ONNX basename alone is complete or safe, and never removes provider-owned shared
+not pretend that deleting only a checkpoint/config basename is complete or safe, and never removes provider-owned shared
 caches.
 
 **Remove prepared files** is safe and idempotent, and is unavailable while the selected model is queued or

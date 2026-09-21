@@ -12,6 +12,7 @@ from riffroom.models import (
     COMMUNITY_MODELS,
     CURATED_MODELS,
     MODELS,
+    VALIDATED_PORTABLE_VARIANTS,
     community_model_id,
     community_profiles_from_metadata,
     current_platform_key,
@@ -69,8 +70,8 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         assert model["supported_platforms"] == ["macos-arm64"]
         platform_key = current_platform_key()
         platform_supported = platform_key in model["supported_platforms"]
-        portable_pilot = model["provider_options"] == ["audio-separator"]
-        expected_runtime = platform_supported and not portable_pilot
+        portable_only = model["provider_options"] == ["audio-separator"]
+        expected_runtime = platform_supported and not portable_only
         expected_compatibility = expected_runtime
         assert model["compatibility"]["platform_key"] == platform_key
         assert model["compatibility"]["platform_name"]
@@ -97,45 +98,57 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         assert model["terms_status"] == "unverified"
         assert "Checkpoint terms unverified" in model["license"]
         if "audio-separator" in model["provider_options"]:
-            assert model["catalog_origin"].startswith("audio-separator 0.47.0 validated portable pilot")
+            assert model["catalog_origin"].startswith(
+                "audio-separator 0.47.0 execution-validated on macos-arm64"
+            )
         else:
             assert model["catalog_origin"].startswith("mlx-audio-separator 0.1.7 bundled")
 
 
-def test_portable_pilot_routing_cleanup_and_runtime_compatibility(application, monkeypatch):
+def test_portable_allowlist_routing_cleanup_and_runtime_compatibility(application, monkeypatch):
     app, client = application
-    pilot = next(model for model in MODELS.values() if model.filename == "UVR-MDX-NET-Inst_HQ_5.onnx")
+    portable_models = [model for model in MODELS.values() if model.filename in VALIDATED_PORTABLE_VARIANTS]
+    pilot = next(model for model in portable_models if model.filename == "UVR-MDX-NET-Inst_HQ_5.onnx")
 
+    assert {model.filename for model in portable_models} == set(VALIDATED_PORTABLE_VARIANTS)
     assert pilot.name == "MDX-Net Model: UVR-MDX-NET Inst HQ 5"
-    assert [variant.provider_id for variant in pilot.variants] == ["audio-separator"]
-    assert all(variant.validated for variant in pilot.variants)
     assert pilot.stems == ("instrumental", "vocals")
-    assert pilot.supported_platforms == ("macos-arm64",)
-    assert pilot.cache_cleanup_supported is False
+    assert all(
+        [variant.provider_id for variant in model.variants] == ["audio-separator"]
+        and all(variant.validated for variant in model.variants)
+        and model.supported_platforms == ("macos-arm64",)
+        and model.cache_cleanup_supported is False
+        for model in portable_models
+    )
     assert all(
         len(model.variants) == 1 and model.variants[0].provider_id == "mlx-audio-separator"
         for model in MODELS.values()
-        if model.filename != pilot.filename
+        if model.filename not in VALIDATED_PORTABLE_VARIANTS
     )
-    cleanup = client.delete(f"/api/models/{pilot.id}/cache")
-    assert cleanup.status_code == 409
-    assert "portable model" in cleanup.json()["detail"]
+    for model in portable_models:
+        cleanup = client.delete(f"/api/models/{model.id}/cache")
+        assert cleanup.status_code == 409
+        assert "portable model" in cleanup.json()["detail"]
 
     monkeypatch.setattr("riffroom.app.is_provider_available", lambda provider_id: False)
-    unavailable = {item["id"]: item for item in client.get("/api/models").json()}[pilot.id]
-    if unavailable["compatibility"]["platform_supported"]:
-        assert unavailable["compatibility"]["compatible"] is False
-        assert unavailable["compatibility"]["label"].startswith("Runtime required")
-        assert unavailable["provider"] is None
+    unavailable = {item["id"]: item for item in client.get("/api/models").json()}
+    for model in portable_models:
+        row = unavailable[model.id]
+        if row["compatibility"]["platform_supported"]:
+            assert row["compatibility"]["compatible"] is False
+            assert row["compatibility"]["label"].startswith("Runtime required")
+            assert row["provider"] is None
 
     executable = app.state.audio_separator_runtime.runtime / "venv" / "bin" / "audio-separator"
     executable.parent.mkdir(parents=True)
     executable.touch(mode=0o755)
     (app.state.audio_separator_runtime.runtime / "VERSION").write_text("0.47.0")
-    available = {item["id"]: item for item in client.get("/api/models").json()}[pilot.id]
-    assert available["compatibility"]["compatible"] is available["compatibility"]["platform_supported"]
-    if available["compatibility"]["platform_supported"]:
-        assert available["provider"] == "audio-separator"
+    available = {item["id"]: item for item in client.get("/api/models").json()}
+    for model in portable_models:
+        row = available[model.id]
+        assert row["compatibility"]["compatible"] is row["compatibility"]["platform_supported"]
+        if row["compatibility"]["platform_supported"]:
+            assert row["provider"] == "audio-separator"
 
 
 def test_runtime_status_and_install_endpoints_do_not_expose_paths(tmp_path):

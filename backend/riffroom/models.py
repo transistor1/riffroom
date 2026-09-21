@@ -161,10 +161,21 @@ CURATED_MODELS = {
 COMMUNITY_ORIGIN = "mlx-audio-separator 0.1.7 bundled models.json + models-scores.json"
 RUNTIME_SOURCE = "https://github.com/ssmall256/mlx-audio-separator"
 PORTABLE_PILOT_FILENAME = "UVR-MDX-NET-Inst_HQ_5.onnx"
+PORTABLE_DRUMSEP_FILENAME = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
+PORTABLE_KARAOKE_FILENAME = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
 PORTABLE_RUNTIME_SOURCE = "https://github.com/nomadkaraoke/python-audio-separator"
-PORTABLE_PILOT_ORIGIN = (
-    "audio-separator 0.47.0 validated portable pilot; stems from mlx-audio-separator 0.1.7 bundled metadata"
+PORTABLE_VALIDATION_ORIGIN = (
+    "audio-separator 0.47.0 execution-validated on macos-arm64; "
+    "stems from mlx-audio-separator 0.1.7 bundled metadata"
 )
+VALIDATED_PORTABLE_VARIANTS = {
+    filename: ExecutionVariant(PORTABLE_PROVIDER, filename, ("macos-arm64",), True)
+    for filename in (
+        PORTABLE_PILOT_FILENAME,
+        PORTABLE_DRUMSEP_FILENAME,
+        PORTABLE_KARAOKE_FILENAME,
+    )
+}
 COMMUNITY_ARCHITECTURES = {
     "vr_download_list": "VR",
     "mdx_download_list": "MDX",
@@ -261,42 +272,31 @@ def community_profiles_from_metadata(
     profiles = []
     for candidate in unique.values():
         cache_files = candidate["cache_files"]
-        portable_pilot = candidate["filename"] == PORTABLE_PILOT_FILENAME
+        portable_variant = VALIDATED_PORTABLE_VARIANTS.get(candidate["filename"])
         profiles.append(
             ModelProfile(
                 id=community_model_id(candidate["filename"]),
                 name=candidate["name"],
                 stems=candidate["stems"],
                 description=(
-                    "The validated portable-runtime pilot, executed by audio-separator 0.47.0. "
+                    "Validated through the portable audio-separator 0.47.0 runtime on Apple Silicon. "
                     "Review its results and checkpoint terms before relying on it."
-                    if portable_pilot
+                    if portable_variant
                     else "A trusted community checkpoint exposed by the pinned local runtime. "
                     "Review its results and checkpoint terms before relying on it."
                 ),
                 badge="Community",
                 license="Checkpoint terms unverified; the runtime code license does not cover these weights.",
-                source=PORTABLE_RUNTIME_SOURCE if portable_pilot else RUNTIME_SOURCE,
+                source=PORTABLE_RUNTIME_SOURCE if portable_variant else RUNTIME_SOURCE,
                 architecture=candidate["architecture"],
                 terms_status="unverified",
-                variants=(
-                    (
-                        ExecutionVariant(
-                            PORTABLE_PROVIDER,
-                            candidate["filename"],
-                            ("macos-arm64",),
-                            True,
-                        ),
-                    )
-                    if portable_pilot
-                    else (_mlx_variant(candidate["filename"]),)
-                ),
-                cache_files=() if portable_pilot else cache_files,
+                variants=(portable_variant,) if portable_variant else (_mlx_variant(candidate["filename"]),),
+                cache_files=() if portable_variant else cache_files,
                 curated=False,
-                catalog_origin=PORTABLE_PILOT_ORIGIN if portable_pilot else COMMUNITY_ORIGIN,
+                catalog_origin=PORTABLE_VALIDATION_ORIGIN if portable_variant else COMMUNITY_ORIGIN,
                 catalog_group="community",
                 cache_cleanup_supported=(
-                    False if portable_pilot else all(cache_owners[item] == 1 for item in cache_files)
+                    False if portable_variant else all(cache_owners[item] == 1 for item in cache_files)
                 ),
             )
         )
