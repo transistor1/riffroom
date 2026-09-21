@@ -28,16 +28,21 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
   in `data/runtimes/audio-separator/venv`. It honors an administrator executable override first, discovers `PATH`
   second, and otherwise uses the managed copy. Installation uses argv-only child processes, verifies the CLI before
   publishing the temporary runtime directory, and keeps installation state and errors in the server process.
-- `models.py`: provider-aware declarative catalog consumed by the UI. The curated layer is static. The community
-  layer reads only the pinned runtime's bundled `models.json` and `models-scores.json`, admits entries with an
-  explicit non-empty stem list, and derives opaque SHA-256-based IDs. A profile stores user-facing metadata once
+- `models.py`: provider-aware declarative catalog consumed by the UI. The curated layer and the three validated
+  portable community profiles are static server-owned metadata. When the optional MLX package is installed, the
+  community layer additionally reads its bundled `models.json` and `models-scores.json`, admits entries with an
+  explicit non-empty stem list, and derives opaque SHA-256-based IDs. Static portable rows win when the sources
+  are merged, so those filenames remain one logical row even without MLX. A profile stores user-facing metadata once
   and has an ordered tuple of server-owned execution variants. Each variant names only a trusted provider,
   checkpoint filename, explicit validation state and platform capabilities. The API computes compatibility
   across validated variants and reports the first available variant as the selected provider without duplicating
   the logical catalog row.
 - `providers/`: the trusted separation-provider boundary. `base.py` defines separation and runtime-availability,
   `__init__.py` resolves provider IDs through an explicit server-owned registry, and `mlx.py` owns the current
-  production `mlx-audio-separator` runtime. `audio_separator.py` is an out-of-process bridge to the fixed portable
+  production `mlx-audio-separator` runtime. The MLX provider resolves its optional runtime only for availability
+  checks and execution; importing the registry does not import `separator.py` or `mlx_audio_separator`. An
+  unavailable MLX invocation fails explicitly rather than changing providers. `audio_separator.py` is an
+  out-of-process bridge to the fixed portable
   executable resolved from administrator configuration, `PATH`, or the managed runtime. Portable routing is limited
   to an explicit server-owned table containing `UVR-MDX-NET-Inst_HQ_5.onnx`,
   `MDX23C-DrumSep-aufr33-jarredou.ckpt`, and
@@ -63,9 +68,9 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 
 Add a curated logical profile with a unique ID, expected stem names, source, checkpoint terms and architecture,
 then declare one or more ordered trusted execution variants with provider, checkpoint filename, explicit
-validation state and platform capabilities. Registry presence alone is not validation. Eligible community
-profiles are generated only from
-the pinned runtime metadata: `models.json` must declare a safe checkpoint basename (and optional config basename),
+validation state and platform capabilities. Registry presence alone is not validation. Beyond the three static
+portable entries, eligible community profiles are generated only from the optional pinned MLX runtime metadata:
+`models.json` must declare a safe checkpoint basename (and optional config basename),
 and `models-scores.json` must explicitly list its output stems. Friendly names and filenames are not parsed to
 guess outputs. For another architecture or provider, implement a reviewed provider that returns its expected
 aligned stereo 44.1 kHz float WAV paths; the shared worker will validate them and write the unchanged stem
@@ -110,6 +115,18 @@ model again.
 Portable-routed community models are deliberately excluded from model-specific cache accounting and removal. The portable
 runtime can own additional registry and model files that are not completely enumerated by Riffroom, so partial
 cleanup would be misleading and unsafe.
+
+## Packaging boundary
+
+The base project dependency set contains only the web/audio application requirements. The Apple inference stack is
+declared in the `mlx` optional dependency group with the same pinned MLX Audio Separator, Demucs, Torch and
+Torchaudio versions used by the tested installation. MLX package resources are optional at import time: without
+them the app, model catalog and explicit provider registry still import; the four curated profiles remain visible
+but runtime-unavailable, and the community catalog contains the three static portable profiles.
+
+This phase intentionally does not change `requirements-lock.txt` or any launcher/setup script. The existing Mac
+setup continues to install the complete Apple Silicon stack from that lock. Declared model platform capabilities
+also remain `macos-arm64`; portable Windows/Linux setup and validation come later.
 
 A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The mixer accepts arbitrary names; add display labels/icons and choose how the guitar presets target the new names.
 

@@ -18,6 +18,7 @@ from riffroom.models import (
     current_platform_key,
     filter_models,
 )
+from riffroom.providers import is_provider_available
 
 
 @pytest.fixture
@@ -59,7 +60,11 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         "demucs-ft",
     ]
     assert len(models) > 4
-    assert {model["provider"] for model in models} == {"mlx-audio-separator", None}
+    mlx_available = is_provider_available("mlx-audio-separator")
+    assert {model["provider"] for model in models[:4]} == {"mlx-audio-separator" if mlx_available else None}
+    assert all(
+        model["provider"] is None for model in models[4:] if model["provider_options"] == ["audio-separator"]
+    )
     assert {"Demucs", "RoFormer", "MDXC"} <= {model["architecture"] for model in models}
     assert {model["terms_status"] for model in models} == {
         "open",
@@ -71,7 +76,7 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         platform_key = current_platform_key()
         platform_supported = platform_key in model["supported_platforms"]
         portable_only = model["provider_options"] == ["audio-separator"]
-        expected_runtime = platform_supported and not portable_only
+        expected_runtime = platform_supported and not portable_only and mlx_available
         expected_compatibility = expected_runtime
         assert model["compatibility"]["platform_key"] == platform_key
         assert model["compatibility"]["platform_name"]
@@ -264,6 +269,8 @@ def test_only_trusted_community_ids_can_start_separation(application):
 
 
 def test_local_separator_rejects_an_untrusted_filename_before_runtime_lookup():
+    if not is_provider_available("mlx-audio-separator"):
+        pytest.skip("optional MLX runtime is not installed")
     from riffroom.separator import LocalSeparator
 
     separator = object.__new__(LocalSeparator)
@@ -380,12 +387,17 @@ def test_delete_unknown_model_cache_returns_404(application):
 def test_shared_community_config_cannot_be_removed(application):
     app, client = application
     model = next(
-        model
-        for model in COMMUNITY_MODELS.values()
-        if not model.cache_cleanup_supported
-        and len(model.variants) == 1
-        and model.variants[0].provider_id == "mlx-audio-separator"
+        (
+            model
+            for model in COMMUNITY_MODELS.values()
+            if not model.cache_cleanup_supported
+            and len(model.variants) == 1
+            and model.variants[0].provider_id == "mlx-audio-separator"
+        ),
+        None,
     )
+    if model is None:
+        pytest.skip("optional MLX community metadata is not installed")
     assets = write_model_assets(app.state.jobs.cache, model.id)
 
     response = client.delete(f"/api/models/{model.id}/cache")

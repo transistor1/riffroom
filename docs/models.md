@@ -13,13 +13,15 @@ The target is an M1 MacBook Air with 16 GB unified memory. Independent guitar, d
 ## Provider-aware catalog
 
 The catalog has two layers. The four hand-reviewed profiles remain the curated, recommended set and are the only
-cards on the import page. The Model Manager also exposes a community layer generated from metadata bundled in the
-pinned `mlx-audio-separator` 0.1.7 wheel. The API compares every profile's declared platform capabilities with a
+cards on the import page. The Model Manager always exposes three execution-validated portable community profiles
+whose logical metadata is trusted server-side. When installed, the optional `mlx-audio-separator` 0.1.7 wheel adds
+the broader community layer generated from its bundled metadata. The API compares every profile's declared platform capabilities with a
 stable current-platform key such as `macos-arm64`, `windows-x86_64` or `linux-x86_64`; the manager presents that
 result instead of making its own operating-system assumptions.
 
-The authoritative community inputs are the installed package's `mlx_audio_separator/models.json` and
-`mlx_audio_separator/models-scores.json` files. In the inspected 0.1.7 package:
+The authoritative inputs for the broader optional community catalog are the installed package's
+`mlx_audio_separator/models.json` and `mlx_audio_separator/models-scores.json` files. If the package or either
+usable metadata file is absent, Riffroom does not fabricate those entries. In the inspected 0.1.7 package:
 
 - `models.json` provides the friendly-name key, architecture registry group, checkpoint filename and, for MDXC
   and RoFormer entries, an optional config filename.
@@ -28,7 +30,7 @@ The authoritative community inputs are the installed package's `mlx_audio_separa
 - Neither bundled file provides a per-checkpoint source URL or checkpoint license/usage terms.
 
 The bundled registry contains 83 entries, but only 27 have a matching non-empty `stems` list in the bundled score
-metadata. Those 27 are runnable community entries; the other 56 are excluded rather than deriving outputs from
+metadata. Those 27 are runnable community entries when the optional package is present; the other 56 are excluded rather than deriving outputs from
 names or filenames. Riffroom does not use the runtime's separately downloaded, mutable `download_checks.json` to
 expand the displayed catalog. Community source links therefore point to the runtime project page, not a fabricated
 checkpoint page. Every community entry says **Checkpoint terms unverified** because the runtime's code license says
@@ -53,7 +55,9 @@ Each remains one logical community catalog row with its existing generated model
 runtime on a generated six-second stereo WAV; the CLI exited successfully and every stem declared by the trusted
 bundled metadata was produced as a readable stereo WAV. Registry presence alone did not qualify any model, and no
 other curated or community filename is routed to the portable provider. MLX variants are not inferred for these
-logical models from MLX registry presence. The server chooses the first validated, host-capable variant whose hard-coded
+logical models from MLX registry presence. Their filenames, friendly names, architectures and stem lists are now
+copied into the server-owned catalog so they remain available when MLX is not installed. When bundled metadata is
+present, these static rows override and deduplicate matching filenames. The server chooses the first validated, host-capable variant whose hard-coded
 provider runtime is available. It freezes that provider for the job invocation and records the provider ID in new
 run metadata; it never silently falls back after execution begins. A later retry resolves again. Existing history
 without a provider ID remains valid. Model metadata cannot supply a Python module, class or executable path.
@@ -92,9 +96,15 @@ are future work.
 `mlx-audio-separator` 0.1.7 provides native Apple GPU inference for Demucs, MDXC/RoFormer, MDX and VR
 architectures. Upstream publishes validation evidence and scoped MLX/PyTorch performance comparisons, but those
 are not M1 timings or guarantees. This app uses one worker and batch size one to limit memory use. PyTorch is
-installed for first-run checkpoint conversion. [Runtime source](https://github.com/ssmall256/mlx-audio-separator).
+installed for first-run checkpoint conversion. The package declares this complete inference stack in its optional
+`mlx` dependency group, and the four curated profiles remain visible but report runtime-unavailable if that group
+is missing. [Runtime source](https://github.com/ssmall256/mlx-audio-separator).
 
 The original Demucs Python package is pinned to 4.0.1 with Torch/Torchaudio 2.8.0 for compatibility with the tested conversion path. Inference uses MLX, rather than PyTorch's MPS implementation.
+
+This dependency split does not yet broaden supported platforms: all declared model variants remain
+`macos-arm64`. The existing setup script still installs the full Apple stack from `requirements-lock.txt`; that
+lock and the launch scripts are intentionally unchanged until the later cross-platform setup phase.
 
 ## Lead/rhythm guitar
 
@@ -104,10 +114,13 @@ No stereo-center subtraction, EQ split, or duplicated guitar output is presented
 
 ## Weight management
 
-Profiles are assembled in `backend/riffroom/models.py`: curated definitions are static, while community definitions
-come only from the two pinned bundled metadata files described above. The MLX provider owns the runtime's
+Profiles are assembled in `backend/riffroom/models.py`: curated and validated portable definitions are static,
+while the broader community definitions come only from the two optional pinned bundled metadata files described
+above. The MLX provider owns the runtime's
 construction, separation parameters and float WAV writer override; the lower-level adapter in `separator.py` uses
-the upstream model registry for downloads and the author's published Hugging Face files for guitar focus. Atomic
+the upstream model registry for downloads and the author's published Hugging Face files for guitar focus. That
+adapter and `mlx_audio_separator` are loaded only after the optional provider runtime is resolved, not while the
+app or provider registry imports. Atomic
 downloads prevent cancelled downloads from becoming valid cache hits. Model WAV outputs use float32 without
 independently normalizing each stem, preserving the model's relative output levels. A final playback compressor
 limits boosted sums; 100% faders are not guaranteed to reconstruct the original mix exactly because separation

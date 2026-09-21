@@ -7,20 +7,42 @@ import pytest
 from riffroom.models import CURATED_MODELS
 from riffroom.providers import get_provider, is_provider_available
 from riffroom.providers.audio_separator import AudioSeparatorCliProvider
-from riffroom.providers.mlx import MlxAudioSeparatorProvider
+from riffroom.providers.mlx import MlxAudioSeparatorProvider, MlxRuntimeUnavailableError
 
 
 def test_trusted_mlx_provider_resolves():
     provider = get_provider("mlx-audio-separator")
 
     assert isinstance(provider, MlxAudioSeparatorProvider)
-    assert is_provider_available("mlx-audio-separator") is True
+    assert is_provider_available("mlx-audio-separator") is provider.is_available()
 
 
 def test_trusted_audio_separator_provider_resolves():
     provider = get_provider("audio-separator")
 
     assert isinstance(provider, AudioSeparatorCliProvider)
+
+
+def test_mlx_provider_unavailable_runtime_fails_clearly(tmp_path, monkeypatch):
+    notified = []
+
+    def unavailable_runtime():
+        raise MlxRuntimeUnavailableError("optional MLX runtime unavailable")
+
+    monkeypatch.setattr("riffroom.providers.mlx._load_runtime", unavailable_runtime)
+    provider = MlxAudioSeparatorProvider()
+
+    assert provider.is_available() is False
+    with pytest.raises(MlxRuntimeUnavailableError, match="optional MLX runtime unavailable"):
+        provider.separate(
+            CURATED_MODELS["demucs-6"],
+            CURATED_MODELS["demucs-6"].variants[0],
+            tmp_path / "source.wav",
+            tmp_path / "output",
+            tmp_path / "cache",
+            on_model_loaded=lambda: notified.append(True),
+        )
+    assert notified == []
 
 
 def test_unknown_provider_fails_closed():
@@ -201,8 +223,11 @@ def test_mlx_provider_preserves_runtime_configuration(tmp_path, monkeypatch):
 
     configured = []
     writes = []
-    monkeypatch.setattr("riffroom.providers.mlx.LocalSeparator", FakeSeparator)
-    monkeypatch.setattr("riffroom.providers.mlx.configure_demucs_cache", configured.append)
+    runtime = SimpleNamespace(
+        LocalSeparator=FakeSeparator,
+        configure_demucs_cache=configured.append,
+    )
+    monkeypatch.setattr("riffroom.providers.mlx._load_runtime", lambda: runtime)
     monkeypatch.setattr(
         "riffroom.providers.mlx.write_float_stem",
         lambda output_path, stem_path, samples: writes.append((output_path, stem_path, samples)),

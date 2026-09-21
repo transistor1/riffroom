@@ -1,4 +1,9 @@
+import os
+import subprocess
+import sys
+import textwrap
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from riffroom.models import (
@@ -6,12 +11,14 @@ from riffroom.models import (
     CURATED_MODELS,
     MLX_PROVIDER,
     MODELS,
+    PORTABLE_COMMUNITY_MODELS,
     PORTABLE_DRUMSEP_FILENAME,
     PORTABLE_KARAOKE_FILENAME,
     PORTABLE_PILOT_FILENAME,
     PORTABLE_PROVIDER,
     VALIDATED_PORTABLE_VARIANTS,
     ExecutionVariant,
+    _community_models_from_metadata,
     catalog,
     community_model_id,
     resolve_model_variant,
@@ -58,6 +65,161 @@ def test_validated_portable_allowlist_is_explicit_and_portable_only():
         variant == ExecutionVariant(PORTABLE_PROVIDER, filename, ("macos-arm64",), True)
         for filename, variant in VALIDATED_PORTABLE_VARIANTS.items()
     )
+
+
+def test_portable_profiles_have_stable_server_owned_metadata():
+    expected = {
+        PORTABLE_PILOT_FILENAME: (
+            "community-1d16a41dda1ff0f680e1ffcda8ea3a4d73a1f9b3c484f3e16dc2afef7c34ad48",
+            "MDX-Net Model: UVR-MDX-NET Inst HQ 5",
+            ("instrumental", "vocals"),
+            "MDX",
+        ),
+        PORTABLE_DRUMSEP_FILENAME: (
+            "community-6cbb86284613af448231fa205efc8b89e57de2ad63af9514ad18ce26419c53df",
+            "MDX23C Model: MDX23C DrumSep by aufr33-jarredou",
+            ("kick", "snare", "toms", "hh", "ride", "crash"),
+            "MDXC",
+        ),
+        PORTABLE_KARAOKE_FILENAME: (
+            "community-bfc6a33361639cad7b7e2b01d5a71a312057d6ee026ad573febcb1dc200a5c75",
+            "Roformer Model: Mel-Roformer-Karaoke-Aufr33-Viperx",
+            ("vocals", "instrumental"),
+            "RoFormer",
+        ),
+    }
+
+    assert len(PORTABLE_COMMUNITY_MODELS) == 3
+    for filename, (model_id, name, stems, architecture) in expected.items():
+        model = PORTABLE_COMMUNITY_MODELS[model_id]
+        assert community_model_id(filename) == model_id
+        assert (model.name, model.stems, model.architecture) == (name, stems, architecture)
+        assert model.terms_status == "unverified"
+        assert model.variants == (VALIDATED_PORTABLE_VARIANTS[filename],)
+
+
+def test_optional_metadata_is_merged_and_portable_profile_wins():
+    registry = {
+        "mdx_download_list": {
+            "Stale portable name": PORTABLE_PILOT_FILENAME,
+            "Additional bundled model": "additional.onnx",
+        }
+    }
+    scores = {
+        PORTABLE_PILOT_FILENAME: {"stems": ["wrong"]},
+        "additional.onnx": {"stems": ["vocals", "instrumental"]},
+    }
+
+    models = _community_models_from_metadata(registry, scores)
+
+    assert len(models) == 4
+    portable = models[community_model_id(PORTABLE_PILOT_FILENAME)]
+    assert portable == PORTABLE_COMMUNITY_MODELS[portable.id]
+    assert portable.name == "MDX-Net Model: UVR-MDX-NET Inst HQ 5"
+    assert portable.stems == ("instrumental", "vocals")
+    bundled = models[community_model_id("additional.onnx")]
+    assert bundled.name == "Additional bundled model"
+    assert bundled.variants[0].provider_id == MLX_PROVIDER
+
+
+def test_installed_bundled_metadata_preserves_broader_27_model_catalog():
+    if len(COMMUNITY_MODELS) == len(PORTABLE_COMMUNITY_MODELS):
+        pytest.skip("optional MLX community metadata is not installed")
+
+    assert len(COMMUNITY_MODELS) == 27
+    assert sum(model.filename in VALIDATED_PORTABLE_VARIANTS for model in COMMUNITY_MODELS.values()) == len(
+        PORTABLE_COMMUNITY_MODELS
+    )
+
+
+def test_modules_import_and_catalog_survives_without_optional_mlx_stack(tmp_path):
+    script = textwrap.dedent(
+        """
+        import sys
+        from pathlib import Path
+
+        blocked = ("mlx_audio_separator", "mlx", "demucs", "torch", "torchaudio")
+
+        class OptionalRuntimeBlocker:
+            def find_spec(self, fullname, path=None, target=None):
+                if any(fullname == name or fullname.startswith(name + ".") for name in blocked):
+                    raise ModuleNotFoundError(f"blocked optional runtime: {fullname}", name=fullname)
+                return None
+
+        sys.meta_path.insert(0, OptionalRuntimeBlocker())
+
+        import riffroom.app
+        from riffroom.models import (
+            COMMUNITY_MODELS,
+            CURATED_MODELS,
+            MLX_PROVIDER,
+            PORTABLE_PROVIDER,
+            catalog,
+        )
+        from riffroom.providers import get_provider
+        from riffroom.providers.mlx import MlxRuntimeUnavailableError
+
+        assert "riffroom.separator" not in sys.modules
+        assert len(COMMUNITY_MODELS) == 3
+        expected = {
+            "UVR-MDX-NET-Inst_HQ_5.onnx": (
+                "community-1d16a41dda1ff0f680e1ffcda8ea3a4d73a1f9b3c484f3e16dc2afef7c34ad48",
+                ("instrumental", "vocals"),
+                "MDX",
+            ),
+            "MDX23C-DrumSep-aufr33-jarredou.ckpt": (
+                "community-6cbb86284613af448231fa205efc8b89e57de2ad63af9514ad18ce26419c53df",
+                ("kick", "snare", "toms", "hh", "ride", "crash"),
+                "MDXC",
+            ),
+            "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": (
+                "community-bfc6a33361639cad7b7e2b01d5a71a312057d6ee026ad573febcb1dc200a5c75",
+                ("vocals", "instrumental"),
+                "RoFormer",
+            ),
+        }
+        actual = {model.filename: (model.id, model.stems, model.architecture) for model in COMMUNITY_MODELS.values()}
+        assert actual == expected
+
+        provider = get_provider(MLX_PROVIDER)
+        assert provider.is_available() is False
+        try:
+            provider.separate(
+                CURATED_MODELS["demucs-6"],
+                CURATED_MODELS["demucs-6"].variants[0],
+                Path("source.wav"),
+                Path("output"),
+                Path("cache"),
+                on_model_loaded=lambda: None,
+            )
+        except MlxRuntimeUnavailableError as exc:
+            assert "Install this checkout with the 'mlx' optional dependencies" in str(exc)
+        else:
+            raise AssertionError("unavailable MLX provider did not fail")
+
+        rows = catalog(
+            Path("cache"),
+            provider_availability={MLX_PROVIDER: False, PORTABLE_PROVIDER: False},
+            platform_key="macos-arm64",
+        )
+        curated = {row["id"]: row for row in rows if row["curated"]}
+        assert set(curated) == set(CURATED_MODELS)
+        assert all(row["compatibility"]["runtime_available"] is False for row in curated.values())
+        assert all(row["compatibility"]["label"].startswith("Runtime required") for row in curated.values())
+        """
+    )
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])}
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("filename", PORTABLE_FILENAMES)
@@ -158,8 +320,10 @@ def test_new_portable_models_keep_trusted_stems():
 
 
 def test_unrelated_community_model_does_not_gain_portable_variant():
-    unrelated = next(
-        model for model in COMMUNITY_MODELS.values() if model.filename not in VALIDATED_PORTABLE_VARIANTS
+    models = _community_models_from_metadata(
+        {"mdx_download_list": {"Unrelated model": "unrelated.onnx"}},
+        {"unrelated.onnx": {"stems": ["vocals", "instrumental"]}},
     )
+    unrelated = models[community_model_id("unrelated.onnx")]
 
     assert all(variant.provider_id != PORTABLE_PROVIDER for variant in unrelated.variants)

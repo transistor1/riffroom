@@ -63,6 +63,11 @@ Riffroom uses a standard Python virtual environment inside `.env` and does not r
 
 First-time setup installs the pinned Python dependencies and npm lockfile, keeps the development checks available in this source checkout, and builds the UI. Later launches automatically refresh setup after dependency manifests change. An existing working `.env` is reused. Setup uses the SDK returned by `xcrun`, when available, to avoid a mismatched beta SDK/compiler. Model weights download when each profile is first used. A full song can take several minutes on an M1; there is no fake percentage or promised completion time.
 
+The Python package now separates its core web/audio dependencies from an optional `mlx` dependency group. This is
+an import and packaging boundary for future portable installs, not a Windows or Linux release. In this phase the
+existing `setup.sh`/launcher path still installs `requirements-lock.txt`, which remains the complete tested Apple
+Silicon stack including MLX, Demucs, Torch and Torchaudio. Cross-platform setup scripts come in a later phase.
+
 Limits: 512 MB uploads and 20-minute tracks. Decoded audio/stems can use substantially more disk and memory than an MP3. The browser decodes one selected result into memory. Shorter tracks and fewer simultaneous tabs are preferable on a 16 GB Mac.
 
 ## Development

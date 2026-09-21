@@ -166,7 +166,7 @@ PORTABLE_KARAOKE_FILENAME = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956
 PORTABLE_RUNTIME_SOURCE = "https://github.com/nomadkaraoke/python-audio-separator"
 PORTABLE_VALIDATION_ORIGIN = (
     "audio-separator 0.47.0 execution-validated on macos-arm64; "
-    "stems from mlx-audio-separator 0.1.7 bundled metadata"
+    "Riffroom-trusted metadata copied from mlx-audio-separator 0.1.7"
 )
 VALIDATED_PORTABLE_VARIANTS = {
     filename: ExecutionVariant(PORTABLE_PROVIDER, filename, ("macos-arm64",), True)
@@ -195,6 +195,60 @@ def community_model_id(filename: str) -> str:
     """Derive a stable ID without exposing a filename as a client-selectable ID."""
     digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()
     return f"community-{digest}"
+
+
+def _portable_community_profile(
+    filename: str,
+    name: str,
+    stems: tuple[str, ...],
+    architecture: str,
+) -> ModelProfile:
+    """Build one server-owned portable profile independent of optional MLX metadata."""
+    return ModelProfile(
+        id=community_model_id(filename),
+        name=name,
+        stems=stems,
+        description=(
+            "Validated through the portable audio-separator 0.47.0 runtime on Apple Silicon. "
+            "Review its results and checkpoint terms before relying on it."
+        ),
+        badge="Community",
+        license="Checkpoint terms unverified; the runtime code license does not cover these weights.",
+        source=PORTABLE_RUNTIME_SOURCE,
+        architecture=architecture,
+        terms_status="unverified",
+        variants=(VALIDATED_PORTABLE_VARIANTS[filename],),
+        cache_files=(),
+        curated=False,
+        catalog_origin=PORTABLE_VALIDATION_ORIGIN,
+        catalog_group="community",
+        cache_cleanup_supported=False,
+    )
+
+
+PORTABLE_COMMUNITY_MODELS = {
+    profile.id: profile
+    for profile in (
+        _portable_community_profile(
+            PORTABLE_PILOT_FILENAME,
+            "MDX-Net Model: UVR-MDX-NET Inst HQ 5",
+            ("instrumental", "vocals"),
+            "MDX",
+        ),
+        _portable_community_profile(
+            PORTABLE_DRUMSEP_FILENAME,
+            "MDX23C Model: MDX23C DrumSep by aufr33-jarredou",
+            ("kick", "snare", "toms", "hh", "ride", "crash"),
+            "MDXC",
+        ),
+        _portable_community_profile(
+            PORTABLE_KARAOKE_FILENAME,
+            "Roformer Model: Mel-Roformer-Karaoke-Aufr33-Viperx",
+            ("vocals", "instrumental"),
+            "RoFormer",
+        ),
+    )
+}
 
 
 def _trusted_filename(value: Any, suffixes: set[str]) -> str | None:
@@ -304,21 +358,32 @@ def community_profiles_from_metadata(
 
 
 def _load_bundled_community_metadata() -> tuple[dict[str, Any], dict[str, Any]]:
-    package = resources.files("mlx_audio_separator")
     try:
+        package = resources.files("mlx_audio_separator")
         registry = json.loads(package.joinpath("models.json").read_text(encoding="utf-8"))
         scores = json.loads(package.joinpath("models-scores.json").read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, TypeError):
+    except (ImportError, OSError, json.JSONDecodeError, TypeError):
+        return {}, {}
+    if not isinstance(registry, dict) or not isinstance(scores, dict):
         return {}, {}
     return registry, scores
 
 
+def _community_models_from_metadata(
+    model_registry: dict[str, Any], model_scores: dict[str, Any]
+) -> dict[str, ModelProfile]:
+    """Merge optional MLX metadata with the authoritative portable profiles."""
+    profiles = {
+        profile.id: profile
+        for profile in community_profiles_from_metadata(model_registry, model_scores)
+        if profile.id not in CURATED_MODELS
+    }
+    profiles.update(PORTABLE_COMMUNITY_MODELS)
+    return profiles
+
+
 _COMMUNITY_REGISTRY, _COMMUNITY_SCORES = _load_bundled_community_metadata()
-COMMUNITY_MODELS = {
-    profile.id: profile
-    for profile in community_profiles_from_metadata(_COMMUNITY_REGISTRY, _COMMUNITY_SCORES)
-    if profile.id not in CURATED_MODELS
-}
+COMMUNITY_MODELS = _community_models_from_metadata(_COMMUNITY_REGISTRY, _COMMUNITY_SCORES)
 MODELS = {**CURATED_MODELS, **COMMUNITY_MODELS}
 
 

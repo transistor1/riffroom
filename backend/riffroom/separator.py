@@ -59,9 +59,7 @@ class LocalSeparator(Separator):
                     expected = response.headers.get("Content-Length")
                     encoding = response.headers.get("Content-Encoding", "identity").lower()
                     if expected and encoding in {"", "identity"} and size != int(expected):
-                        raise ValueError(
-                            f"Model download was incomplete ({size} of {expected} bytes)."
-                        )
+                        raise ValueError(f"Model download was incomplete ({size} of {expected} bytes).")
                     if size == 0:
                         raise ValueError("Model download was empty.")
                     temporary.replace(target)
@@ -76,9 +74,7 @@ class LocalSeparator(Separator):
                         attempt + 1,
                         exc,
                     )
-        raise RuntimeError(
-            f"Could not download {target.name} after 3 attempts: {last_error}"
-        ) from last_error
+        raise RuntimeError(f"Could not download {target.name} after 3 attempts: {last_error}") from last_error
 
     def download_model_files(self, model_filename):
         if model_filename == "becruily_guitar.ckpt":
