@@ -1,5 +1,10 @@
 export type Stem = { name: string; file: string; url: string; peaks: number[] };
-export type Run = { id: string; model_id: string; stems: Stem[] };
+export type Run = {
+  id: string;
+  model_id: string;
+  provider_id?: string;
+  stems: Stem[];
+};
 export type Track = {
   id: string;
   title: string;
@@ -23,7 +28,8 @@ export type Model = {
   badge: string;
   license: string;
   source: string;
-  provider: string;
+  provider: string | null;
+  provider_options: string[];
   architecture: string;
   supported_platforms: string[];
   terms_status: "open" | "non-commercial" | "unverified";

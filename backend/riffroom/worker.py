@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from riffroom.audio import validate_stems, waveform
-from riffroom.models import MODELS
+from riffroom.models import MODELS, variant_for_provider
 from riffroom.providers import PROVIDERS, SeparationProvider, get_provider
 
 
@@ -20,15 +20,18 @@ def run(
     output: Path,
     cache: Path,
     model_id: str,
+    provider_id: str,
     provider_registry: Mapping[str, SeparationProvider] = PROVIDERS,
 ):
     profile = MODELS[model_id]
+    variant = variant_for_provider(profile, provider_id)
     output.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
     event("Loading model · first use downloads and converts the weights")
-    provider = get_provider(profile.provider, provider_registry)
+    provider = get_provider(variant.provider_id, provider_registry)
     produced = provider.separate(
         profile,
+        variant,
         source,
         output,
         cache,
@@ -47,7 +50,7 @@ def run(
 
 if __name__ == "__main__":
     # Keep all caches inside the app's data folder, including first-run conversions.
-    source, output, cache, model_id = sys.argv[1:]
+    source, output, cache, model_id, provider_id = sys.argv[1:]
     os.environ.setdefault("TORCH_HOME", str(Path(cache) / "torch"))
     os.environ.setdefault("XDG_CACHE_HOME", str(Path(cache) / "cache"))
-    run(Path(source), Path(output), Path(cache), model_id)
+    run(Path(source), Path(output), Path(cache), model_id, provider_id)

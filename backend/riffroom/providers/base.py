@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-from riffroom.models import ModelProfile
+from riffroom.models import ExecutionVariant, ModelProfile
 
 
 def normalized_stem_paths(stems: tuple[str, ...], output: Path) -> dict[str, Path]:
@@ -30,6 +30,7 @@ class SeparationProvider(Protocol):
     def separate(
         self,
         profile: ModelProfile,
+        variant: ExecutionVariant,
         source: Path,
         output: Path,
         cache: Path,

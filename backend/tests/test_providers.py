@@ -48,6 +48,7 @@ def test_audio_separator_configured_executable_wins_over_path(tmp_path):
     assert provider.is_available() is True
     provider.separate(
         CURATED_MODELS["demucs-6"],
+        CURATED_MODELS["demucs-6"].variants[0],
         tmp_path / "source.wav",
         tmp_path,
         tmp_path / "cache",
@@ -78,6 +79,7 @@ def test_audio_separator_unavailable_runtime_fails_clearly(tmp_path):
     ):
         provider.separate(
             CURATED_MODELS["demucs-6"],
+            CURATED_MODELS["demucs-6"].variants[0],
             tmp_path / "source.wav",
             tmp_path / "output",
             tmp_path / "cache",
@@ -111,6 +113,7 @@ def test_audio_separator_cli_contract_and_normalized_outputs(tmp_path):
     )
     paths = provider.separate(
         profile,
+        profile.variants[0],
         source,
         output,
         cache,
@@ -155,6 +158,7 @@ def test_audio_separator_nonzero_exit_has_bounded_actionable_error(tmp_path):
     with pytest.raises(RuntimeError) as raised:
         provider.separate(
             CURATED_MODELS["demucs-6"],
+            CURATED_MODELS["demucs-6"].variants[0],
             tmp_path / "source.wav",
             tmp_path / "output",
             tmp_path / "cache",
@@ -206,6 +210,7 @@ def test_mlx_provider_preserves_runtime_configuration(tmp_path, monkeypatch):
 
     paths = MlxAudioSeparatorProvider().separate(
         profile,
+        profile.variants[0],
         source,
         output,
         cache,

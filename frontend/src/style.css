@@ -1847,3 +1847,9 @@ h1 em {
     animation-duration: 3s;
   }
 }
+.provider-alternatives {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}

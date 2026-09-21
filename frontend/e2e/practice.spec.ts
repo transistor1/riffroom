@@ -19,7 +19,30 @@ test.afterEach(async ({ page }) => {
   );
 });
 
-test("portable pilot requires explicit runtime install before use", async ({
+test("portable pilot appears once and does not advertise unvalidated MLX", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Model manager" }).click();
+  const manager = page.getByRole("dialog", { name: "Model manager" });
+  await manager.getByRole("button", { name: "Community" }).click();
+  await manager.getByLabel("Search models").fill("UVR-MDX-NET Inst HQ 5");
+  const pilot = manager.locator(".manager-model").filter({
+    has: manager.getByRole("heading", {
+      name: "MDX-Net Model: UVR-MDX-NET Inst HQ 5",
+    }),
+  });
+
+  await expect(pilot).toHaveCount(1);
+  await expect(pilot.getByText("mlx-audio-separator")).toHaveCount(0);
+  await expect(
+    pilot
+      .locator("dl > div")
+      .filter({ hasText: "Provider / runtime" })
+      .locator("code"),
+  ).toHaveText(/^(audio-separator|No runtime available)$/);
+});
+
+test("portable pilot offers install only when no variant is usable", async ({
   page,
 }) => {
   let available = false;
@@ -70,7 +93,8 @@ test("portable pilot requires explicit runtime install before use", async ({
   await page.route("**/api/models", async (route) => {
     const response = await route.fetch();
     const models = (await response.json()) as Array<{
-      provider: string;
+      provider: string | null;
+      provider_options: string[];
       compatibility: {
         platform_supported: boolean;
         runtime_available: boolean;
@@ -79,7 +103,8 @@ test("portable pilot requires explicit runtime install before use", async ({
       };
     }>;
     for (const model of models) {
-      if (model.provider !== "audio-separator") continue;
+      if (!model.provider_options.includes("audio-separator")) continue;
+      model.provider = available ? "audio-separator" : null;
       model.compatibility.platform_supported = true;
       model.compatibility.runtime_available = available;
       model.compatibility.compatible = available;

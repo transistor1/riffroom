@@ -4,9 +4,12 @@ import os
 import shutil
 import signal
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
+from riffroom.models import MODELS, PORTABLE_PROVIDER, resolve_model_variant
+from riffroom.providers import PROVIDERS, SeparationProvider, is_provider_available
 from riffroom.runtimes import AUDIO_SEPARATOR_ENV, AudioSeparatorRuntime
 from riffroom.store import Store
 
@@ -15,10 +18,15 @@ ACTIVE = {"queued", "processing"}
 
 class Jobs:
     def __init__(
-        self, store: Store, cache: Path, runtime: AudioSeparatorRuntime | None = None
+        self,
+        store: Store,
+        cache: Path,
+        runtime: AudioSeparatorRuntime | None = None,
+        provider_registry: Mapping[str, SeparationProvider] = PROVIDERS,
     ):
         self.store, self.cache = store, cache
         self.runtime = runtime
+        self.provider_registry = provider_registry
         self.slots = asyncio.Semaphore(1)
         self.tasks: dict[str, asyncio.Task] = {}
         self.processes: dict[str, asyncio.subprocess.Process] = {}
@@ -30,6 +38,11 @@ class Jobs:
             if executable is not None:
                 environment[AUDIO_SEPARATOR_ENV] = str(executable)
         return environment
+
+    def _provider_available(self, provider_id: str) -> bool:
+        if provider_id == PORTABLE_PROVIDER and self.runtime is not None:
+            return self.runtime.executable() is not None
+        return is_provider_available(provider_id, self.provider_registry)
 
     def start(self, track_id: str, model_id: str):
         if track_id in self.tasks:
@@ -45,6 +58,12 @@ class Jobs:
         output = folder / "runs" / run_id
         try:
             async with self.slots:
+                variant = resolve_model_variant(MODELS[model_id], self._provider_available)
+                if variant is None:
+                    raise RuntimeError(
+                        "No installed separation runtime is available for this model on this host."
+                    )
+                provider_id = variant.provider_id
                 self.store.update(track_id, status="processing", message="Starting the separator")
                 output.mkdir(parents=True)
                 with (output / "job.log").open("w") as log:
@@ -57,6 +76,7 @@ class Jobs:
                             str(output),
                             str(self.cache),
                             model_id,
+                            provider_id,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.STDOUT,
                             start_new_session=True,
@@ -85,7 +105,14 @@ class Jobs:
                 for stem in stems:
                     stem["url"] = f"/api/tracks/{track_id}/audio/{run_id}/{stem['file']}"
                 track = self.store.get(track_id)
-                runs = track.get("runs", []) + [{"id": run_id, "model_id": model_id, "stems": stems}]
+                runs = track.get("runs", []) + [
+                    {
+                        "id": run_id,
+                        "model_id": model_id,
+                        "provider_id": provider_id,
+                        "stems": stems,
+                    }
+                ]
                 self.store.update(
                     track_id,
                     status="ready",

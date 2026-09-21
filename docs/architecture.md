@@ -8,8 +8,8 @@ FastAPI on 127.0.0.1:8765
         ├── atomic JSON project store
         └── one-at-a-time job queue
                 └── cancellable Python subprocess
-                        ├── trusted catalog profile → provider/runtime
-                        │       ├── current production MLX inference
+                        ├── logical model → ordered trusted execution variants
+                        │       ├── production MLX inference for validated profiles
                         │       └── managed audio-separator 0.47.0 venv → one MDX pilot
                         └── aligned float WAV stems + waveform peaks
 
@@ -30,21 +30,25 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
   publishing the temporary runtime directory, and keeps installation state and errors in the server process.
 - `models.py`: provider-aware declarative catalog consumed by the UI. The curated layer is static. The community
   layer reads only the pinned runtime's bundled `models.json` and `models-scores.json`, admits entries with an
-  explicit non-empty stem list, and derives opaque SHA-256-based IDs. Profiles describe architecture, runtime
-  provider, supported platform capabilities, checkpoint terms, catalog origin and exact app-owned cache files.
-  The API computes compatibility and prepared-file state without changing inference dispatch.
+  explicit non-empty stem list, and derives opaque SHA-256-based IDs. A profile stores user-facing metadata once
+  and has an ordered tuple of server-owned execution variants. Each variant names only a trusted provider,
+  checkpoint filename, explicit validation state and platform capabilities. The API computes compatibility
+  across validated variants and reports the first available variant as the selected provider without duplicating
+  the logical catalog row.
 - `providers/`: the trusted separation-provider boundary. `base.py` defines separation and runtime-availability,
   `__init__.py` resolves provider IDs through an explicit server-owned registry, and `mlx.py` owns the current
   production `mlx-audio-separator` runtime. `audio_separator.py` is an out-of-process bridge to the fixed portable
   executable resolved from administrator configuration, `PATH`, or the managed runtime. Only
-  `UVR-MDX-NET-Inst_HQ_5.onnx` routes through it. Provider IDs never name an importable module, class or executable
-  path.
+  `UVR-MDX-NET-Inst_HQ_5.onnx` is the only portable pilot. Provider IDs never name an importable module, class
+  or executable path.
 - `separator.py`: low-level adapter for the pinned MLX runtime. It provides atomic downloads, a project-local
   Demucs conversion cache and the dedicated guitar profile behavior used by the MLX provider.
 - `demucs_cache.py`: strict restoration of native MLX parameter paths, correcting the pinned upstream cached-weight loading bug.
-- `worker.py`: shared isolated inference entry point, provider dispatch, phase messages, expected-stem/alignment
-  validation, waveform generation and manifest writing. Successful aligned outputs are published together;
-  partial outputs never appear as finished runs.
+- `worker.py`: shared isolated inference entry point, resolved-variant provider dispatch, phase messages,
+  expected-stem/alignment validation, waveform generation and manifest writing. The job resolves exactly one
+  variant before spawning the worker and passes that trusted provider ID into the process. There is no mid-job
+  fallback: an execution failure fails the run, while a later retry resolves again from current availability.
+  Successful aligned outputs are published together; partial outputs never appear as finished runs.
 - `frontend/src/audio.ts`: audio scheduling independent of React. Shared start time, seek offsets and loop boundaries prevent HTML-audio-element drift. Gain changes use short ramps. Source playback rate controls tempo; one shared post-mix SoundTouchJS AudioWorklet compensates the rate-induced pitch change and applies the independent user pitch offset. The worklet uses the default Lanczos interpolation with exhaustive seeking and music-oriented WSOLA parameters; only at rates up to 0.55× do its sequence and seek windows use SoundTouch's tempo-aware auto sizing.
 - `frontend/src/components/Mixer.tsx`: shared transport, loop controls, channel state and per-result local storage. The main and per-stem waveform range controls all seek the same audio engine and React playhead position.
 - `frontend/src/components/Waveform.tsx`: waveform rendering from backend peaks.
@@ -55,8 +59,10 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 
 ## Adding a model
 
-Add a curated profile with a unique ID, checkpoint filename, expected stem names, source, checkpoint terms,
-architecture, provider and explicit platform capabilities. Eligible community profiles are generated only from
+Add a curated logical profile with a unique ID, expected stem names, source, checkpoint terms and architecture,
+then declare one or more ordered trusted execution variants with provider, checkpoint filename, explicit
+validation state and platform capabilities. Registry presence alone is not validation. Eligible community
+profiles are generated only from
 the pinned runtime metadata: `models.json` must declare a safe checkpoint basename (and optional config basename),
 and `models-scores.json` must explicitly list its output stems. Friendly names and filenames are not parsed to
 guess outputs. For another architecture or provider, implement a reviewed provider that returns its expected
@@ -64,14 +70,15 @@ aligned stereo 44.1 kHz float WAV paths; the shared worker will validate them an
 manifest. Add its fixed ID to the trusted registry rather than loading a module from metadata. Do not let raw user
 input select arbitrary checkpoint files, paths, URLs, Python modules or executable code.
 
-Compatibility is capability-driven per profile and provider, not inferred from an architecture name or a UI
-operating-system check. The current catalog keeps the existing `mlx-audio-separator` Apple Silicon execution
-path unchanged. The `audio-separator` provider is available only when its administrator override, `PATH` command,
-or managed CLI resolves successfully. Platform support and runtime readiness are separate API fields: on a
-supported host the portable pilot remains visible in Model Manager as **Runtime required** but is excluded from
-normal selectors until the runtime is ready. The user must explicitly start the large install; opening Model
-Manager never installs software. Windows and Linux venv layouts are handled by the installer, but Riffroom setup,
-the pilot profile, and end-to-end validation remain `macos-arm64` only in this phase.
+Compatibility is capability-driven across a profile's validated variants, not inferred from an architecture name
+or a UI operating-system check. Existing production profiles keep their `mlx-audio-separator` Apple Silicon
+execution paths. The pilot is currently validated only through `audio-separator`; its presence in MLX's bundled
+registry is not treated as runtime proof. The portable provider is available only when its administrator override,
+`PATH` command, or managed CLI resolves successfully. Until then the pilot remains visible in Model Manager as
+**Runtime required**, stays out of normal selectors, and offers the portable installer. The user must explicitly
+start the large install; opening Model Manager never installs software. Windows and Linux venv layouts are handled
+by the installer, but Riffroom setup, the pilot profile, and end-to-end validation remain `macos-arm64` only in
+this phase.
 
 The install endpoint accepts no package, version, executable, or provider input. It always creates a temporary
 venv with the running Riffroom Python, installs exactly `audio-separator[cpu]==0.47.0`, and installs the pinned
@@ -96,7 +103,7 @@ caches such as `data/models/torch` / `TORCH_HOME`. In particular,
 removing Demucs prepared files may leave upstream Torch downloads on disk even though the next use converts the
 model again.
 
-The portable pilot is deliberately excluded from model-specific cache accounting and removal. The upstream
+The portable pilot is deliberately excluded from model-specific cache accounting and removal. The portable
 runtime can own additional registry and model files that are not completely enumerated by Riffroom, so partial
 cleanup would be misleading and unsafe.
 

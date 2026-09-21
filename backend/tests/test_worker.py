@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 from riffroom import worker
-from riffroom.models import CURATED_MODELS
+from riffroom.models import CURATED_MODELS, ExecutionVariant
 
 
 def write_source(path, *, frames=8):
@@ -22,7 +22,7 @@ def test_worker_dispatches_paths_and_writes_unchanged_manifest(tmp_path, monkeyp
     profile = replace(
         CURATED_MODELS["demucs-6"],
         id="test-model",
-        provider="test-provider",
+        variants=(ExecutionVariant("test-provider", "test.bin", ("macos-arm64",), True),),
         stems=("guitar",),
     )
     received = {}
@@ -31,6 +31,7 @@ def test_worker_dispatches_paths_and_writes_unchanged_manifest(tmp_path, monkeyp
         def separate(
             self,
             received_profile,
+            received_variant,
             received_source,
             received_output,
             received_cache,
@@ -39,6 +40,7 @@ def test_worker_dispatches_paths_and_writes_unchanged_manifest(tmp_path, monkeyp
         ):
             received.update(
                 profile=received_profile,
+                variant=received_variant,
                 source=received_source,
                 output=received_output,
                 cache=received_cache,
@@ -52,10 +54,11 @@ def test_worker_dispatches_paths_and_writes_unchanged_manifest(tmp_path, monkeyp
     monkeypatch.setattr(worker, "MODELS", {profile.id: profile})
     monkeypatch.setattr(worker, "waveform", lambda path: [0.25, 1.0])
 
-    worker.run(source, output, cache, profile.id, {profile.provider: FakeProvider()})
+    worker.run(source, output, cache, profile.id, "test-provider", {"test-provider": FakeProvider()})
 
     assert received == {
         "profile": profile,
+        "variant": profile.variants[0],
         "source": source,
         "output": output,
         "cache": cache,
@@ -83,12 +86,12 @@ def test_worker_still_validates_provider_stems_before_manifest(tmp_path, monkeyp
     profile = replace(
         CURATED_MODELS["demucs-6"],
         id="test-model",
-        provider="test-provider",
+        variants=(ExecutionVariant("test-provider", "test.bin", ("macos-arm64",), True),),
         stems=("guitar",),
     )
 
     class MisalignedProvider:
-        def separate(self, profile, source, output, cache, *, on_model_loaded):
+        def separate(self, profile, variant, source, output, cache, *, on_model_loaded):
             on_model_loaded()
             stem = output / "guitar.wav"
             write_source(stem, frames=4)
@@ -97,7 +100,14 @@ def test_worker_still_validates_provider_stems_before_manifest(tmp_path, monkeyp
     monkeypatch.setattr(worker, "MODELS", {profile.id: profile})
 
     with pytest.raises(ValueError, match="isn't aligned with the source"):
-        worker.run(source, output, cache, profile.id, {profile.provider: MisalignedProvider()})
+        worker.run(
+            source,
+            output,
+            cache,
+            profile.id,
+            "test-provider",
+            {"test-provider": MisalignedProvider()},
+        )
 
     assert not (output / "stems.json").exists()
 
@@ -108,12 +118,12 @@ def test_worker_rejects_a_missing_expected_stem(tmp_path, monkeypatch):
     profile = replace(
         CURATED_MODELS["demucs-6"],
         id="test-model",
-        provider="test-provider",
+        variants=(ExecutionVariant("test-provider", "test.bin", ("macos-arm64",), True),),
         stems=("guitar",),
     )
 
     class MissingStemProvider:
-        def separate(self, profile, source, output, cache, *, on_model_loaded):
+        def separate(self, profile, variant, source, output, cache, *, on_model_loaded):
             on_model_loaded()
             return {}
 
@@ -125,5 +135,44 @@ def test_worker_rejects_a_missing_expected_stem(tmp_path, monkeypatch):
             tmp_path / "output",
             tmp_path / "cache",
             profile.id,
-            {profile.provider: MissingStemProvider()},
+            "test-provider",
+            {"test-provider": MissingStemProvider()},
         )
+
+
+def test_worker_does_not_fall_back_after_selected_provider_fails(tmp_path, monkeypatch):
+    source = tmp_path / "source.wav"
+    write_source(source)
+    profile = replace(
+        CURATED_MODELS["demucs-6"],
+        id="test-model",
+        variants=(
+            ExecutionVariant("preferred", "preferred.bin", ("macos-arm64",), True),
+            ExecutionVariant("fallback", "fallback.bin", ("macos-arm64",), True),
+        ),
+    )
+    calls = []
+
+    class FailingProvider:
+        def separate(self, profile, variant, source, output, cache, *, on_model_loaded):
+            calls.append(variant.provider_id)
+            raise RuntimeError("selected provider failed")
+
+    class FallbackProvider:
+        def separate(self, profile, variant, source, output, cache, *, on_model_loaded):
+            calls.append(variant.provider_id)
+            return {}
+
+    monkeypatch.setattr(worker, "MODELS", {profile.id: profile})
+
+    with pytest.raises(RuntimeError, match="selected provider failed"):
+        worker.run(
+            source,
+            tmp_path / "output",
+            tmp_path / "cache",
+            profile.id,
+            "preferred",
+            {"preferred": FailingProvider(), "fallback": FallbackProvider()},
+        )
+
+    assert calls == ["preferred"]

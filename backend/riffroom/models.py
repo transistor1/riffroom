@@ -8,28 +8,57 @@ import stat
 from dataclasses import asdict, dataclass
 from importlib import resources
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Protocol
+
+
+class ProviderAvailability(Protocol):
+    def __call__(self, provider_id: str) -> bool: ...
+
+
+@dataclass(frozen=True)
+class ExecutionVariant:
+    """Trusted server-owned instructions for one way to execute a logical model."""
+
+    provider_id: str
+    filename: str
+    supported_platforms: tuple[str, ...]
+    validated: bool
 
 
 @dataclass(frozen=True)
 class ModelProfile:
     id: str
     name: str
-    filename: str
     stems: tuple[str, ...]
     description: str
     badge: str
     license: str
     source: str
-    provider: str
     architecture: str
-    supported_platforms: tuple[str, ...]
     terms_status: str
+    variants: tuple[ExecutionVariant, ...]
     cache_files: tuple[str, ...]
     curated: bool = True
     catalog_origin: str = "Riffroom curated catalog"
     catalog_group: str = "curated"
     cache_cleanup_supported: bool = True
+
+    @property
+    def filename(self) -> str:
+        """Return the preferred variant filename for legacy trusted-filename checks."""
+        return self.variants[0].filename
+
+    @property
+    def supported_platforms(self) -> tuple[str, ...]:
+        """Return the logical model's union of variant platform capabilities."""
+        return tuple(
+            dict.fromkeys(
+                platform
+                for variant in self.variants
+                if variant.validated
+                for platform in variant.supported_platforms
+            )
+        )
 
 
 PLATFORM_NAMES = {
@@ -50,22 +79,28 @@ def current_platform_key() -> str:
 
 
 SIX_STEMS = ("guitar", "vocals", "drums", "bass", "piano", "other")
+MLX_PROVIDER = "mlx-audio-separator"
+PORTABLE_PROVIDER = "audio-separator"
+
+
+def _mlx_variant(filename: str) -> ExecutionVariant:
+    return ExecutionVariant(MLX_PROVIDER, filename, ("macos-arm64",), True)
+
+
 CURATED_MODELS = {
     model.id: model
     for model in (
         ModelProfile(
             "demucs-6",
             "Demucs · 6 stems",
-            "htdemucs_6s.yaml",
             SIX_STEMS,
             "A practical starting point for guitar practice. Separates guitar, vocals, drums, bass, piano and other instruments. Piano separation is experimental.",
             "Start here",
             "MIT",
             "https://github.com/facebookresearch/demucs",
-            "mlx-audio-separator",
             "Demucs",
-            ("macos-arm64",),
             "open",
+            (_mlx_variant("htdemucs_6s.yaml"),),
             (
                 "htdemucs_6s.yaml",
                 "5c90dfd2-34c22ccb.th",
@@ -76,46 +111,40 @@ CURATED_MODELS = {
         ModelProfile(
             "roformer-6",
             "RoFormer · 6 stems",
-            "BS-Roformer-SW.ckpt",
             SIX_STEMS,
             "An alternative six-stem model worth comparing on difficult guitar parts. Uses more memory and may take longer. Community weights have no clear redistribution license.",
             "Compare quality",
             "Community weights; redistribution terms unverified",
             "https://github.com/ssmall256/mlx-audio-separator",
-            "mlx-audio-separator",
             "RoFormer",
-            ("macos-arm64",),
             "unverified",
+            (_mlx_variant("BS-Roformer-SW.ckpt"),),
             ("BS-Roformer-SW.ckpt", "BS-Roformer-SW.yaml"),
         ),
         ModelProfile(
             "guitar-focus",
             "RoFormer · guitar focus",
-            "becruily_guitar.ckpt",
             ("guitar", "other"),
             "A specialist guitar extractor: all guitars plus the rest of the band. Compare it when six-stem guitar extraction has too much bleed. Weights are for non-commercial use.",
             "Guitar specialist",
             "Author permits non-commercial use",
             "https://huggingface.co/becruily/mel-band-roformer-guitar",
-            "mlx-audio-separator",
             "RoFormer",
-            ("macos-arm64",),
             "non-commercial",
+            (_mlx_variant("becruily_guitar.ckpt"),),
             ("becruily_guitar.ckpt", "config_guitar_becruily.yaml"),
         ),
         ModelProfile(
             "demucs-ft",
             "Demucs · detailed 4 stems",
-            "htdemucs_ft.yaml",
             ("vocals", "drums", "bass", "other"),
             "Fine-tuned four-model ensemble for drums, bass and vocals. Guitar stays in Other. Expect a longer processing time.",
             "Drums & bass",
             "MIT",
             "https://github.com/facebookresearch/demucs",
-            "mlx-audio-separator",
             "Demucs",
-            ("macos-arm64",),
             "open",
+            (_mlx_variant("htdemucs_ft.yaml"),),
             (
                 "htdemucs_ft.yaml",
                 "f7e0c4bc-ba3fe64a.th",
@@ -132,10 +161,10 @@ CURATED_MODELS = {
 COMMUNITY_ORIGIN = "mlx-audio-separator 0.1.7 bundled models.json + models-scores.json"
 RUNTIME_SOURCE = "https://github.com/ssmall256/mlx-audio-separator"
 PORTABLE_PILOT_FILENAME = "UVR-MDX-NET-Inst_HQ_5.onnx"
-PORTABLE_PILOT_ORIGIN = (
-    "audio-separator 0.47.0 portable pilot; stems from mlx-audio-separator 0.1.7 bundled metadata"
-)
 PORTABLE_RUNTIME_SOURCE = "https://github.com/nomadkaraoke/python-audio-separator"
+PORTABLE_PILOT_ORIGIN = (
+    "audio-separator 0.47.0 validated portable pilot; stems from mlx-audio-separator 0.1.7 bundled metadata"
+)
 COMMUNITY_ARCHITECTURES = {
     "vr_download_list": "VR",
     "mdx_download_list": "MDX",
@@ -204,8 +233,7 @@ def community_profiles_from_metadata(
             if not isinstance(raw_stems, list) or not raw_stems:
                 continue
             if not all(
-                isinstance(stem, str) and SAFE_STEM_NAME.fullmatch(stem.strip())
-                for stem in raw_stems
+                isinstance(stem, str) and SAFE_STEM_NAME.fullmatch(stem.strip()) for stem in raw_stems
             ):
                 continue
             candidates.append(
@@ -238,10 +266,9 @@ def community_profiles_from_metadata(
             ModelProfile(
                 id=community_model_id(candidate["filename"]),
                 name=candidate["name"],
-                filename=candidate["filename"],
                 stems=candidate["stems"],
                 description=(
-                    "The first portable runtime pilot, executed by audio-separator 0.47.0. "
+                    "The validated portable-runtime pilot, executed by audio-separator 0.47.0. "
                     "Review its results and checkpoint terms before relying on it."
                     if portable_pilot
                     else "A trusted community checkpoint exposed by the pinned local runtime. "
@@ -250,18 +277,26 @@ def community_profiles_from_metadata(
                 badge="Community",
                 license="Checkpoint terms unverified; the runtime code license does not cover these weights.",
                 source=PORTABLE_RUNTIME_SOURCE if portable_pilot else RUNTIME_SOURCE,
-                provider="audio-separator" if portable_pilot else "mlx-audio-separator",
                 architecture=candidate["architecture"],
-                supported_platforms=("macos-arm64",),
                 terms_status="unverified",
+                variants=(
+                    (
+                        ExecutionVariant(
+                            PORTABLE_PROVIDER,
+                            candidate["filename"],
+                            ("macos-arm64",),
+                            True,
+                        ),
+                    )
+                    if portable_pilot
+                    else (_mlx_variant(candidate["filename"]),)
+                ),
                 cache_files=() if portable_pilot else cache_files,
                 curated=False,
                 catalog_origin=PORTABLE_PILOT_ORIGIN if portable_pilot else COMMUNITY_ORIGIN,
                 catalog_group="community",
                 cache_cleanup_supported=(
-                    False
-                    if portable_pilot
-                    else all(cache_owners[item] == 1 for item in cache_files)
+                    False if portable_pilot else all(cache_owners[item] == 1 for item in cache_files)
                 ),
             )
         )
@@ -292,7 +327,8 @@ def filter_models(
 ) -> tuple[ModelProfile, ...]:
     """Return the catalog in stable UI order with optional catalog filters."""
     community = sorted(
-        COMMUNITY_MODELS.values(), key=lambda model: (model.name.casefold(), model.filename.casefold())
+        COMMUNITY_MODELS.values(),
+        key=lambda model: (model.name.casefold(), model.variants[0].filename.casefold()),
     )
     ordered = (*CURATED_MODELS.values(), *community)
     needle = query.casefold().strip()
@@ -304,7 +340,7 @@ def filter_models(
         and (
             not needle
             or needle in model.name.casefold()
-            or needle in model.filename.casefold()
+            or any(needle in variant.filename.casefold() for variant in model.variants)
             or any(needle in stem.casefold() for stem in model.stems)
         )
     )
@@ -372,21 +408,91 @@ def clear_model_cache(model: ModelProfile, cache_root: Path) -> None:
             path.unlink()
 
 
-def catalog(cache_root: Path, *, audio_separator_available: bool = False):
-    platform_key = current_platform_key()
+def supported_platforms(model: ModelProfile) -> tuple[str, ...]:
+    """Return the stable union of platforms declared by all execution variants."""
+    return tuple(
+        dict.fromkeys(
+            platform
+            for variant in model.variants
+            if variant.validated
+            for platform in variant.supported_platforms
+        )
+    )
+
+
+def resolve_model_variant(
+    model: ModelProfile,
+    provider_available: ProviderAvailability,
+    *,
+    platform_key: str | None = None,
+) -> ExecutionVariant | None:
+    """Choose the first validated, host-capable variant whose runtime is available."""
+    host = current_platform_key() if platform_key is None else platform_key
+    return next(
+        (
+            variant
+            for variant in model.variants
+            if variant.validated
+            and host in variant.supported_platforms
+            and provider_available(variant.provider_id)
+        ),
+        None,
+    )
+
+
+def variant_for_provider(model: ModelProfile, provider_id: str) -> ExecutionVariant:
+    """Resolve an already-selected provider only within a profile's trusted variants."""
+    try:
+        return next(
+            variant for variant in model.variants if variant.validated and variant.provider_id == provider_id
+        )
+    except StopIteration:
+        raise ValueError(f"Provider {provider_id} is not a trusted variant for model {model.id}.") from None
+
+
+def catalog(
+    cache_root: Path,
+    *,
+    provider_availability: dict[str, bool] | None = None,
+    platform_key: str | None = None,
+):
+    platform_key = current_platform_key() if platform_key is None else platform_key
     platform_name = PLATFORM_NAMES.get(platform_key, platform_key)
+    availability = (
+        {MLX_PROVIDER: True, PORTABLE_PROVIDER: False}
+        if provider_availability is None
+        else provider_availability
+    )
     result = []
     for model in filter_models():
         item = asdict(model)
+        item.pop("variants")
         item.pop("cache_files")
         item.pop("cache_cleanup_supported")
-        platform_supported = platform_key in model.supported_platforms
-        runtime_available = model.provider != "audio-separator" or audio_separator_available
+        host_variants = tuple(
+            variant
+            for variant in model.variants
+            if variant.validated and platform_key in variant.supported_platforms
+        )
+        selected = resolve_model_variant(
+            model,
+            lambda provider_id: availability.get(provider_id, False),
+            platform_key=platform_key,
+        )
+        platform_supported = bool(host_variants)
+        runtime_available = selected is not None
         compatible = platform_supported and runtime_available
         if platform_supported and not runtime_available:
             label = f"Runtime required · {platform_name}"
         else:
             label = f"{'Compatible' if compatible else 'Unavailable'} · {platform_name}"
+        display_variant = selected or (host_variants[0] if host_variants else model.variants[0])
+        item["filename"] = display_variant.filename
+        item["provider"] = selected.provider_id if selected else None
+        item["provider_options"] = list(
+            dict.fromkeys(variant.provider_id for variant in model.variants if variant.validated)
+        )
+        item["supported_platforms"] = list(supported_platforms(model))
         item["compatibility"] = {
             "platform_key": platform_key,
             "platform_name": platform_name,

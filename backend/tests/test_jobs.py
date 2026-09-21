@@ -1,9 +1,17 @@
 import asyncio
+import json
 import sys
+from pathlib import Path
 from uuid import uuid4
 
 from riffroom.jobs import Jobs
+from riffroom.models import PORTABLE_PILOT_FILENAME, community_model_id
 from riffroom.store import Store
+
+
+class AvailableProvider:
+    def is_available(self):
+        return True
 
 
 def test_worker_environment_injects_resolved_runtime_without_overriding_admin(tmp_path, monkeypatch):
@@ -66,5 +74,65 @@ def test_cancel_running_process_retains_previous_results(tmp_path, monkeypatch):
         assert store.get(tid)["runs"] == old
         assert store.get(tid)["status"] == "ready"
         assert not jobs.tasks
+
+    asyncio.run(run())
+
+
+def test_successful_job_stores_resolved_provider_id(tmp_path, monkeypatch):
+    spawned = []
+
+    class EmptyOutput:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class SuccessfulProcess:
+        stdout = EmptyOutput()
+        returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def fake_worker(*args, **kwargs):
+        spawned.append(args)
+        output = Path(args[4])
+        (output / "stems.json").write_text(json.dumps([]))
+        return SuccessfulProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_worker)
+
+    async def run():
+        store = Store(tmp_path / "tracks")
+        tid = uuid4().hex
+        store.put({"id": tid, "status": "idle", "runs": [], "created_at": "now"})
+        jobs = Jobs(
+            store,
+            tmp_path / "models",
+            provider_registry={
+                "mlx-audio-separator": AvailableProvider(),
+                "audio-separator": AvailableProvider(),
+            },
+        )
+
+        jobs.start(tid, "demucs-6")
+        await jobs.tasks[tid]
+
+        run_metadata = store.get(tid)["runs"][0]
+        assert run_metadata["model_id"] == "demucs-6"
+        assert run_metadata["provider_id"] == "mlx-audio-separator"
+        assert spawned[0][6:] == ("demucs-6", "mlx-audio-separator")
+
+        pilot_track = uuid4().hex
+        store.put({"id": pilot_track, "status": "idle", "runs": [], "created_at": "now"})
+        pilot_id = community_model_id(PORTABLE_PILOT_FILENAME)
+        jobs.start(pilot_track, pilot_id)
+        await jobs.tasks[pilot_track]
+
+        pilot_run = store.get(pilot_track)["runs"][0]
+        assert pilot_run["model_id"] == pilot_id
+        assert pilot_run["provider_id"] == "audio-separator"
+        assert spawned[1][6:] == (pilot_id, "audio-separator")
 
     asyncio.run(run())

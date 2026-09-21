@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol
 
-from riffroom.models import ModelProfile
+from riffroom.models import ExecutionVariant, ModelProfile
 from riffroom.providers.base import normalized_stem_paths
 
 _UNAVAILABLE_MESSAGE = (
@@ -58,6 +58,7 @@ class AudioSeparatorCliProvider:
     def separate(
         self,
         profile: ModelProfile,
+        variant: ExecutionVariant,
         source: Path,
         output: Path,
         cache: Path,
@@ -73,7 +74,7 @@ class AudioSeparatorCliProvider:
             executable,
             str(source),
             "--model_filename",
-            profile.filename,
+            variant.filename,
             "--output_dir",
             str(output),
             "--model_file_dir",

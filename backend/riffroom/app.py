@@ -14,7 +14,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from riffroom.audio import decode, waveform
 from riffroom.jobs import ACTIVE, Jobs
-from riffroom.models import MODELS, catalog, clear_model_cache
+from riffroom.models import MLX_PROVIDER, MODELS, PORTABLE_PROVIDER, catalog, clear_model_cache
+from riffroom.providers import is_provider_available
 from riffroom.runtimes import AudioSeparatorRuntime
 from riffroom.store import Store
 
@@ -72,7 +73,13 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
 
     @app.get("/api/models")
     def models():
-        return catalog(jobs.cache, audio_separator_available=runtime.status()["available"] is True)
+        return catalog(
+            jobs.cache,
+            provider_availability={
+                MLX_PROVIDER: is_provider_available(MLX_PROVIDER),
+                PORTABLE_PROVIDER: runtime.status()["available"] is True,
+            },
+        )
 
     @app.get("/api/runtimes/audio-separator")
     def audio_separator_runtime_status():
@@ -90,7 +97,7 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
         if not model.cache_cleanup_supported:
             detail = (
                 "Prepared-file cleanup is unavailable for this portable model."
-                if model.provider == "audio-separator"
+                if any(variant.provider_id == PORTABLE_PROVIDER for variant in model.variants)
                 else "Prepared-file cleanup is unavailable for this shared model config."
             )
             raise HTTPException(409, detail)

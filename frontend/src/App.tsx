@@ -840,7 +840,20 @@ export default function App() {
                     <div>
                       <dt>Provider / runtime</dt>
                       <dd>
-                        <code>{m.provider}</code>
+                        <code>
+                          {m.provider_options.length > 1
+                            ? `Preferred runtime: ${m.provider ?? "unavailable"}`
+                            : (m.provider ?? "No runtime available")}
+                        </code>
+                        {m.provider_options.length > 1 && (
+                          <span className="provider-alternatives">
+                            {m.provider
+                              ? `Alternative: ${m.provider_options
+                                  .filter((provider) => provider !== m.provider)
+                                  .join(", ")}`
+                              : `Options: ${m.provider_options.join(", ")}`}
+                          </span>
+                        )}
                       </dd>
                     </div>
                     <div>
@@ -873,9 +886,9 @@ export default function App() {
                     </span>
                     <p>{m.license}</p>
                   </div>
-                  {m.provider === "audio-separator" &&
+                  {m.provider_options.includes("audio-separator") &&
                     m.compatibility.platform_supported &&
-                    !m.compatibility.runtime_available && (
+                    !m.compatibility.compatible && (
                       <div className="runtime-required" role="status">
                         <strong>Portable runtime required</strong>
                         <span>

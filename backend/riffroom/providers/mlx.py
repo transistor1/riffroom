@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from riffroom.audio import write_float_stem
-from riffroom.models import ModelProfile
+from riffroom.models import ExecutionVariant, ModelProfile
 from riffroom.providers.base import normalized_stem_paths
 from riffroom.separator import LocalSeparator, configure_demucs_cache
 
@@ -20,6 +20,7 @@ class MlxAudioSeparatorProvider:
     def separate(
         self,
         profile: ModelProfile,
+        variant: ExecutionVariant,
         source: Path,
         output: Path,
         cache: Path,
@@ -51,7 +52,7 @@ class MlxAudioSeparatorProvider:
                 "pitch_shift": 0,
             },
         )
-        separator.load_model(profile.filename)
+        separator.load_model(variant.filename)
         separator.model_instance.write_audio = lambda path, samples: write_float_stem(output, path, samples)
         on_model_loaded()
         names = {name: name for name in profile.stems}
