@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
@@ -202,3 +203,92 @@ def test_wildcard_browser_readiness_uses_loopback(monkeypatch):
     launch.open_when_ready("http://127.0.0.1:8765")
     health.assert_called_once_with("http://127.0.0.1:8765")
     browser.assert_called_once_with("http://127.0.0.1:8765")
+
+
+def test_lan_binds_https_and_opens_local_https(monkeypatch, tmp_path, capsys):
+    launch = load_script("launch")
+    monkeypatch.setattr(sys, "argv", ["launch.py", "--lan"])
+    monkeypatch.setenv("RIFFROOM_BIND_HOST", "127.0.0.1")
+    monkeypatch.setattr(launch, "is_riffroom", Mock(side_effect=AssertionError("must not reuse HTTP")))
+    probe = Mock()
+    monkeypatch.setattr(launch.socket, "socket", Mock(return_value=Mock(
+        __enter__=Mock(return_value=probe), __exit__=Mock(return_value=False))))
+    monkeypatch.setattr(launch, "lan_addresses", lambda: ["192.168.1.42"])
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    certificate = Mock(return_value=(cert, key))
+    monkeypatch.setattr(launch, "lan_certificate", certificate)
+    server, thread = Mock(), Mock()
+    monkeypatch.setattr(launch.uvicorn, "run", server)
+    monkeypatch.setattr(launch.threading, "Thread", thread)
+    launch.main()
+    probe.bind.assert_called_once_with(("0.0.0.0", 8765))
+    assert launch.os.environ["RIFFROOM_BIND_HOST"] == "0.0.0.0"
+    certificate.assert_called_once_with(["192.168.1.42"])
+    server.assert_called_once_with("riffroom.app:app", host="0.0.0.0", port=8765, log_level="info",
+                                   ssl_certfile=str(cert), ssl_keyfile=str(key))
+    thread.assert_called_once_with(target=launch.open_when_ready,
+                                   args=("https://127.0.0.1:8765", cert), daemon=True)
+    output = capsys.readouterr().out
+    assert "https://192.168.1.42:8765" in output
+    assert "Safari will warn about the self-signed certificate" in output
+
+
+def test_lan_certificate_generation_and_reuse(monkeypatch, tmp_path):
+    launch = load_script("launch")
+    monkeypatch.setenv("RIFFROOM_DATA", str(tmp_path))
+    monkeypatch.setattr(launch.shutil, "which", lambda name: "/usr/bin/openssl")
+    monkeypatch.setattr(launch.socket, "gethostname", lambda: "riffroom.local")
+
+    def generate(command, **kwargs):
+        assert command[:3] == ["/usr/bin/openssl", "req", "-x509"]
+        assert kwargs == {"check": True, "capture_output": True, "text": True}
+        config = Path(command[command.index("-config") + 1]).read_text()
+        for value in ("localhost", "riffroom.local", "127.0.0.1", "::1", "192.168.1.42"):
+            assert f" = {value}\n" in config
+        Path(command[command.index("-keyout") + 1]).write_text("key")
+        Path(command[command.index("-out") + 1]).write_text("cert")
+
+    runner = Mock(side_effect=generate)
+    monkeypatch.setattr(launch.subprocess, "run", runner)
+    cert, key = launch.lan_certificate(["192.168.1.42"])
+    assert (cert, key) == (tmp_path / "https/cert.pem", tmp_path / "https/key.pem")
+    assert cert.read_text() == "cert"
+    assert key.read_text() == "key"
+    assert key.stat().st_mode & 0o777 == 0o600
+    monkeypatch.setattr(launch.shutil, "which", lambda name: None)
+    assert launch.lan_certificate([]) == (cert, key)
+    runner.assert_called_once()
+
+
+def test_lan_certificate_missing_openssl(monkeypatch, tmp_path):
+    launch = load_script("launch")
+    monkeypatch.setenv("RIFFROOM_DATA", str(tmp_path))
+    monkeypatch.setattr(launch.shutil, "which", lambda name: None)
+    with pytest.raises(SystemExit, match="requires the openssl CLI"):
+        launch.lan_certificate([])
+
+
+def test_lan_certificate_generation_failure(monkeypatch, tmp_path):
+    launch = load_script("launch")
+    monkeypatch.setenv("RIFFROOM_DATA", str(tmp_path))
+    monkeypatch.setattr(launch.shutil, "which", lambda name: "/usr/bin/openssl")
+    monkeypatch.setattr(launch.subprocess, "run", Mock(side_effect=launch.subprocess.CalledProcessError(
+        1, "openssl", stderr="generation failed")))
+    with pytest.raises(SystemExit, match="Cannot generate LAN HTTPS certificate: generation failed"):
+        launch.lan_certificate([])
+    assert not list((tmp_path / "https").iterdir())
+
+
+def test_lan_readiness_trusts_persistent_certificate(monkeypatch, tmp_path):
+    launch = load_script("launch")
+    cert = tmp_path / "cert.pem"
+    context = Mock()
+    create_context = Mock(return_value=context)
+    monkeypatch.setattr(launch.ssl, "create_default_context", create_context)
+    health, browser = Mock(return_value=True), Mock()
+    monkeypatch.setattr(launch, "is_riffroom", health)
+    monkeypatch.setattr(launch.webbrowser, "open", browser)
+    launch.open_when_ready("https://127.0.0.1:8765", cert)
+    create_context.assert_called_once_with(cafile=str(cert))
+    health.assert_called_once_with("https://127.0.0.1:8765", context=context)
+    browser.assert_called_once_with("https://127.0.0.1:8765")
