@@ -3,6 +3,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+if [[ "${1:-}" == --check ]]; then
+  exec bash scripts/setup.sh --check
+fi
+if [[ "$(uname -s)" == Linux ]]; then
+  exec bash scripts/setup.sh --launch "$@"
+fi
+
 # Finder-launched terminals sometimes omit Homebrew from PATH.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 

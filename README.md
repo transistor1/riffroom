@@ -86,6 +86,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1 -Check
 
 Uploads are limited to **512 MB and 20 minutes**. Decoded audio and stems use substantially more memory and disk than an MP3. The browser holds the selected result in memory, so shorter tracks and fewer tabs help on a 16 GB machine. A full song can take several minutes on an M1; progress reports stages, not a promised completion time.
 
+### LAN access / testing another computer
+
+The default is `127.0.0.1` (this computer only). Network binding is opt-in:
+
+```bash
+# macOS / Linux
+./start.sh --host 0.0.0.0
+# Optional: add --no-browser
+```
+
+```powershell
+# Windows (start.ps1 accepts the same options)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1 -BindAddress 0.0.0.0
+# Optional: add -NoBrowser
+```
+
+Stop an existing server before changing its bind address. On another computer, open
+`http://<server-LAN-IP>:8765`; the local browser uses `http://127.0.0.1:8765`.
+You can replace `0.0.0.0` with a specific address assigned to the server.
+Riffroom has no authentication: anyone who can reach the bound interface can access
+the app and data. Use only on a trusted LAN. Windows/Linux fresh-host launch and
+song-splitting validation are still pending.
+
 ## Choosing a splitting method
 
 These curated choices are available through the Apple Silicon setup. Use Model Manager to explore other entries and manage the models in your selection menus; availability depends on your platform and installed tools.
@@ -116,7 +139,7 @@ Deleting a track removes its Riffroom copy and results. It never touches the sou
 
 Models require internet for the initial download. Once their weights/configs are cached, normal separation runs locally. Cancelling a job keeps previous successful results and does not publish partial stems. Download files are committed atomically so interrupted downloads can be retried. Converted weights can occupy several GB; the four prepared curated profiles used roughly 3 GB on the development Mac. Other models and the optional portable engine need additional space.
 
-The server listens only on `127.0.0.1`. It rejects unexpected hostnames and cross-origin mutations. It is a single-user local app, not an authenticated network service.
+The server listens on `127.0.0.1` by default and rejects unexpected hostnames. Explicit network binding permits the chosen host (any host for wildcard binds); cross-origin mutations remain rejected. It is a single-user local app, not an authenticated network service.
 
 ## Development
 

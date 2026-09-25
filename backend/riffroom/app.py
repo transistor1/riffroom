@@ -1,15 +1,18 @@
 import asyncio
+import ipaddress
 import os
 import shutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.datastructures import Headers
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from riffroom.audio import decode, waveform
@@ -22,6 +25,28 @@ from riffroom.store import Store
 ROOT = Path(__file__).resolve().parents[2]
 DATA = Path(os.environ.get("RIFFROOM_DATA", ROOT / "data")).resolve()
 MAX_BYTES = 512 * 1024 * 1024
+
+
+class BindTrustedHostMiddleware(TrustedHostMiddleware):
+    """Handle bracketed IPv6 literals, which TrustedHostMiddleware splits at ':'."""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in {"http", "websocket"}:
+            host = Headers(scope=scope).get("host", "")
+            try:
+                parsed = urlsplit("//" + host)
+                address = parsed.hostname
+                # Accessing port validates the optional numeric suffix.
+                parsed.port
+                trusted_ipv6 = (host.startswith("[") and address
+                                and ipaddress.ip_address(address).version == 6
+                                and address in self.allowed_hosts)
+            except ValueError:
+                trusted_ipv6 = False
+            if trusted_ipv6:
+                await self.app(scope, receive, send)
+                return
+        await super().__call__(scope, receive, send)
 
 
 class SeparationRequest(BaseModel):
@@ -50,11 +75,17 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
 
     app = FastAPI(title="Riffroom", lifespan=lifespan)
     app.state.store, app.state.jobs, app.state.audio_separator_runtime = store, jobs, runtime
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+    allowed_hosts = ["127.0.0.1", "localhost", "testserver"]
+    bind_host = os.environ.get("RIFFROOM_BIND_HOST")
+    if bind_host in {"0.0.0.0", "::"}:
+        allowed_hosts = ["*"]
+    elif bind_host:
+        allowed_hosts.append(bind_host)
+    app.add_middleware(BindTrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
     @app.middleware("http")
     async def same_origin(request: Request, call_next):
-        # Local-only app: reject cross-site mutations (including form uploads).
+        # Reject cross-site mutations (including form uploads), also in opt-in LAN mode.
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("origin")
             if origin and origin != f"{request.url.scheme}://{request.headers.get('host')}":

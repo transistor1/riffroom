@@ -87,8 +87,8 @@ provider is available only when its administrator override, `PATH` command, or m
 Until then each portable-only row remains visible in Model Manager as **Runtime required**, stays out of normal
 selectors, and offers the portable installer. The user must explicitly
 start the large install; opening Model Manager never installs software. Windows and Linux venv layouts are handled
-by the installer, but Riffroom setup, the portable profiles, and end-to-end validation remain `macos-arm64` only in
-this phase.
+by the installer. Source launchers now cover Windows/Linux, but portable profile capabilities and
+end-to-end separation validation remain `macos-arm64` only.
 
 The Phase 3D2 follow-up resolved the Demucs import blocker without a shim. `audio-separator` imports
 `DiffQuantizer`, `UniformQuantizer`, and `restore_quantized_state` at module load; the validated `htdemucs_6s`
@@ -153,9 +153,37 @@ Torchaudio versions used by the tested installation. MLX package resources are o
 them the app, model catalog and explicit provider registry still import; the four curated profiles remain visible
 but runtime-unavailable, and the community catalog contains the three static portable profiles.
 
-This phase intentionally does not change `requirements-lock.txt` or any launcher/setup script. The existing Mac
-setup continues to install the complete Apple Silicon stack from that lock. Declared model platform capabilities
-also remain `macos-arm64`; portable Windows/Linux setup and validation come later.
+The Apple Silicon launcher continues to install the complete MLX stack from `requirements-lock.txt`.
+Linux (`bash start.sh`) and Windows (`Riffroom.ps1`, wrapping `start.ps1`) use
+`scripts/setup_portable.py`, a core-only installer with a project-local `.env`. Windows uses
+`.env/Scripts/python.exe`; Linux/macOS use `.env/bin/python`. Portable setup requires Python 3.11–3.13,
+Node.js 22+ with npm, and FFmpeg/ffprobe on PATH, and never invokes a system package manager.
+`requirements-core-lock.txt` pins the base dependency closure and editable-build setuptools; installation
+uses `--no-deps --no-build-isolation` for the project. Maintain the core pins alongside the full lock;
+the launcher tests check the closure against installed package metadata across Python/platform markers.
+These are version locks, not artifact hashes. The core installer neither installs nor removes MLX in an
+existing environment; use a fresh checkout/environment for a clean core-only installation.
+
+Core setup fingerprints the platform, architecture, Python minor version, dependency files and launcher
+sources. A successful dependency install, `pip check`, and frontend build writes the stamp; failures remain
+retryable. The Mac stamp remains separate. Check mode reports prerequisites and stale dependencies without
+creating an environment, installing packages, building, or starting a server. The shared launcher still reuses
+an existing Riffroom on port 8765 and reports other port conflicts; Windows uses an exclusive probe socket.
+The heavyweight managed audio-separator runtime remains an explicit in-app installation.
+
+Every launcher defaults to `127.0.0.1`. `--host` (PowerShell `-BindAddress`) opts into another
+socket bind address; portable setup forwards it unchanged. The launcher resets the process-local
+`RIFFROOM_BIND_HOST` setting before configuring the app: default trust remains localhost,
+127.0.0.1 and testserver; a specific bind adds that host, while 0.0.0.0/:: permits any Host.
+Bracketed IPv6 literals receive exact address matching before Starlette's hostname check.
+Same-origin mutation checks remain active in every mode. Network binds print an unauthenticated
+access warning. Wildcard binds use a loopback browser/readiness URL; remote clients use the
+computer's LAN IP and port 8765. Only default launches reuse an existing server; explicit binds
+probe the requested socket and report conflicts rather than silently reusing a loopback server.
+
+Declared model capabilities remain `macos-arm64`. Windows/Linux can launch the core app, but enabling
+song splitting requires fresh host validation and a separately reviewed catalog capability update; launcher
+support does not certify inference support. Intel macOS remains outside this MVP.
 
 A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The mixer accepts arbitrary names; add display labels/icons and choose how the guitar presets target the new names.
 

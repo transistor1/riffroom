@@ -1,0 +1,21 @@
+# Core runtime closure from requirements-lock.txt; no inference or dev packages.
+# Setuptools is pinned for the editable build (--no-build-isolation).
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+cffi==2.1.1
+click==8.5.0
+fastapi==0.141.1
+h11==0.16.0
+idna==3.20
+numpy==2.4.6
+pycparser==3.0
+pydantic==2.13.5
+pydantic_core==2.46.5
+python-multipart==0.0.32
+soundfile==0.14.0
+starlette==1.6.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uvicorn==0.53.0
+setuptools==83.0.0

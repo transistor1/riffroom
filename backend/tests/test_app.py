@@ -222,7 +222,8 @@ def test_runtime_status_and_install_endpoints_do_not_expose_paths(tmp_path):
         assert status["managed_installed"] is True
         assert status["version"] == "0.47.0"
         assert str(tmp_path) not in str(status)
-    assert len(calls) == 6
+    # Venv, three pip steps, staged CLI/import checks, then published CLI check.
+    assert len(calls) == 7
 
 
 def test_curated_profiles_are_unchanged_and_community_order_is_deterministic(application):
@@ -598,3 +599,24 @@ def test_float_writer_preserves_relative_levels_and_overrange(tmp_path):
     assert sf.info(tmp_path / "guitar.wav").subtype == "FLOAT"
     with pytest.raises(ValueError, match="invalid audio"):
         write_float_stem(tmp_path, "bad.wav", np.array([[np.nan, 0]]))
+
+
+@pytest.mark.parametrize("bind,host,accepted", [
+    (None, "localhost", True), (None, "127.0.0.1", True), (None, "testserver", True),
+    (None, "192.168.1.42", False), (None, "evil.example", False),
+    ("0.0.0.0", "192.168.1.42", True), ("::", "[fd00::42]", True),
+    ("192.168.1.42", "192.168.1.42", True), ("192.168.1.42", "evil.example", False),
+    ("fd00::42", "[fd00::42]", True), ("fd00::42", "[fd00::43]", False),
+])
+def test_bind_host_trust_and_origin(monkeypatch, tmp_path, bind, host, accepted):
+    monkeypatch.delenv("RIFFROOM_BIND_HOST", raising=False)
+    if bind:
+        monkeypatch.setenv("RIFFROOM_BIND_HOST", bind)
+    app = create_app(tmp_path, tmp_path / "no-frontend")
+    with TestClient(app, headers={"host": f"{host}:8765"}) as client:
+        assert client.get("/api/health").status_code == (200 if accepted else 400)
+        if accepted:
+            endpoint = "/api/tracks/missing/cancel"
+            assert client.post(endpoint, headers={"Origin": "http://evil.example"}).status_code == 403
+            assert client.post(endpoint, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+            assert client.post(endpoint, headers={"Origin": f"http://{host}:8765"}).status_code == 404

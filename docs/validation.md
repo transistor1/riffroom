@@ -80,3 +80,92 @@ All profiles are cached on this machine. The final writer saves float WAVs witho
 - Loop points and transport state reset on result changes; saved channel mix levels/mutes/solos survive browser reloads.
 - Automated browser testing used desktop Chrome. Safari audio decoding was not separately tested.
 - Separation is approximate and can leak instruments. The synthetic test does not establish which model sounds best on a particular recording.
+
+## Cross-platform source launcher MVP
+
+Start from a writable checkout (paths containing spaces are supported):
+
+- Apple Silicon macOS: double-click `Riffroom.command`, or run `bash start.sh`.
+  Diagnostics: `bash start.sh --check` (also `bash scripts/setup.sh --check`).
+- Linux: run `bash start.sh`; diagnostics: `bash start.sh --check`.
+  Install Python 3.11–3.13 including venv/pip support, Node.js 22+ with npm, and
+  FFmpeg/ffprobe using your distribution's documented instructions first.
+- Windows: from PowerShell in the checkout, run
+  `powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1`.
+  The policy override applies only to this invocation. Respect organizational policy restrictions.
+  Add `-Check` for diagnostics or `-NoBrowser` for headless startup.
+  Install Python 3.11–3.13 (Python launcher or PATH option), Node.js 22+ with npm, and
+  FFmpeg with both ffmpeg.exe/ffprobe.exe on PATH; reopen the terminal afterward.
+  `start.ps1` is also a direct entry point. No administrator shell is required.
+
+The launchers create/reuse `.env` automatically. Do not copy `.env` between OSes or machines;
+if diagnostics report an incompatible environment, move it aside and rerun. Setup downloads
+pinned core packages and frontend dependencies; network access is required on first run.
+No outer launcher installs the managed separation runtime. Node/FFmpeg must remain on PATH.
+`--check`/`-Check` return nonzero for missing/incompatible prerequisites and report a missing or
+stale build/stamp as "setup required" without making changes.
+
+Windows/Linux remain **not live validated**. Before public release, use fresh native hosts to test:
+Python 3.11/3.12/3.13 installation and package wheel availability; paths with spaces;
+missing-tool diagnostics and read-only check mode; clean setup and repeat launch;
+browser opening, existing-server reuse, occupied port errors and Ctrl-C shutdown;
+upload/FFmpeg processing; managed runtime installation and real separation.
+The current catalog still limits validated model capabilities to macOS ARM64, so successful
+core startup does not yet enable splitting on Windows/Linux. Update capabilities only after
+native separation validation. PowerShell parsing/check execution on macOS and mocked platform
+tests are not Windows execution evidence.
+
+MVP validation on the development Mac (2026-09-25):
+
+- `.env/bin/python -m pytest backend/tests -q`: 89 passed, 2 skipped; two existing deprecation warnings.
+  Corrected a stale runtime-endpoint test's command count to match the existing seven-step recipe.
+- `.env/bin/ruff check backend scripts`: passed.
+- `bash -n start.sh Riffroom.command scripts/setup.sh`: passed.
+- `bash start.sh --check`: passed; correctly reports the Mac dependency stamp stale after setup changes.
+- `.env/bin/python scripts/setup_portable.py --check`: passed on macOS; reports core setup required.
+- `npm run build --prefix frontend`: passed; no frontend source changes.
+- PowerShell `Parser.ParseFile` for `start.ps1` and `Riffroom.ps1`: passed.
+- `pwsh -NoProfile -NonInteractive -File ./Riffroom.ps1 -Check`: exit 1 with the expected
+  missing Windows Python/PATH guidance on macOS. This checks the prerequisite error path only.
+- `git diff --check`: passed.
+
+No fresh dependency installation or live server/browser launch was performed in this worker.
+Existing-server reuse, port conflict handling, Windows exclusive socket selection, core dependency
+closure, platform fingerprints, venv paths and read-only check behavior were exercised by unit tests.
+
+
+## Installer completion and opt-in LAN binding · 2026-09-25
+
+User-confirmed on a real Apple Silicon Mac: the normal launcher refreshed setup as
+expected after the uncommitted installer changes, displayed MLX as preferred, and
+completed a real Demucs song split successfully. This is user-reported smoke-test
+evidence, separate from the worker's automated checks below.
+
+LAN startup examples: `./start.sh --host 0.0.0.0` on macOS/Linux;
+`powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1 -BindAddress 0.0.0.0`
+on Windows (`start.ps1` supports the same options). Add `--no-browser` / `-NoBrowser`
+as needed. Default startup remains 127.0.0.1. Remote clients use the server's LAN IP
+and port 8765; there is no authentication, so use only a trusted LAN.
+
+Worker validation:
+
+- `.env/bin/python -m pytest backend/tests -q`: 104 passed, 2 skipped, two existing
+  deprecation warnings. Covers default and specific/wildcard binding, process host trust,
+  IPv6 Host handling, unchanged same-origin rejection, portable argument forwarding,
+  static PowerShell forwarding, and wildcard browser/readiness URLs.
+- `.env/bin/ruff check backend scripts`: passed.
+- `bash -n start.sh Riffroom.command scripts/setup.sh`: passed.
+- `bash start.sh --check`: passed; dependency stamp current, no setup changes made.
+- `npm run build --prefix frontend`: passed; no frontend source changes.
+- `pwsh -NoProfile -NonInteractive -Command` using
+  `[System.Management.Automation.Language.Parser]::ParseFile` on `start.ps1` and
+  `Riffroom.ps1`: both passed.
+- `pwsh -NoProfile -NonInteractive -File ./Riffroom.ps1 -Check -BindAddress 0.0.0.0 -NoBrowser`:
+  exit 1 with expected Windows Python/PATH prerequisite guidance on macOS.
+- `git diff --check`: passed.
+
+The initial IPv6 tests encountered the installed Starlette TestClient's IPv6 URL parser
+limitation; explicit Host headers exercise the middleware successfully. No live LAN or
+fresh Windows/Linux host test was performed. Fresh-host launch and song-splitting validation
+remain pending; model platform capability declarations are unchanged. Installer and network
+changes remain uncommitted.

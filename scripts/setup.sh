@@ -3,6 +3,22 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Linux uses the core-only installer. macOS retains the full MLX stack below.
+if [[ "$(uname -s)" == Linux ]]; then
+  riffroom_python=""
+  for candidate in .env/bin/python python3.11 python3.12 python3.13 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; sys.exit(not ((3,11) <= sys.version_info[:2] < (3,14)))' >/dev/null 2>&1; then
+      riffroom_python="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$riffroom_python" ]]; then
+    echo "Install Python 3.11–3.13 with venv/pip support using your distribution's instructions, then rerun bash start.sh."
+    exit 1
+  fi
+  exec "$riffroom_python" scripts/setup_portable.py "$@"
+fi
+
 # Finder-launched terminals often omit Homebrew's install locations.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
