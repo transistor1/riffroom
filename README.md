@@ -1,16 +1,20 @@
-# Riffroom
+# Riffroom: turn a song into a backing track you can play with.
 
-A personal guitar practice room that runs on your Mac. Open or drop a song, separate its instruments, and mix a backing track in your browser.
+![Riffroom stem mixer and practice view](docs/images/riffroom-separation.png)
 
-## Start on this Mac
+I built Riffroom for my own guitar practice and am sharing it in case you'd like to play with it too. Open a song, split it into instruments, then turn the guitar down or off and play along—or solo it to hear the part you're learning. Loop a tricky passage, slow it down without detuning, or transpose it to match your guitar. It all runs locally, with a mixer in your browser.
 
-**Double-click `Riffroom.command`**, or run:
+**Apple Silicon Mac is the supported song-splitting path today.** Experimental Linux and Windows source launchers are included; fresh-host validation is pending, and song splitting is not yet enabled on those platforms.
 
-```bash
-./start.sh
-```
+## What Riffroom does
 
-That is the whole installation process. On the first launch, Riffroom prepares its project environment, installs its packages, builds the interface, and then opens **http://127.0.0.1:8765**. Keep the Terminal window open; Control-C stops the server. Opening the launcher again reuses the running app. No account, API key, paid service, or cloud upload is needed.
+- **Make a backing track:** mix guitar, vocals, drums, bass, piano and other instruments with the six-stem options. Each separated part is called a *stem*.
+- **Listen closely:** solo the guitar, mute another instrument, or combine solos to hear how parts fit together.
+- **Work on a passage:** set an A–B loop, change speed while preserving tuning, and adjust pitch independently.
+- **Compare splitting methods:** keep multiple results for a song and switch between them and the original.
+- **Keep your practice local:** save songs and results on your computer and download individual stems as WAV files. No account, API key, paid service or cloud upload is needed.
+
+Song splitting is approximate: expect some instrument bleed and artifacts, especially in dense mixes. Different methods suit different songs.
 
 ## Practice
 
@@ -24,7 +28,67 @@ That is the whole installation process. On the first launch, Riffroom prepares i
 
 Mix levels, mutes, and solos are remembered per result in this browser. Track audio and all completed separation results persist on disk. Loop points, play position, speed, and master output currently reset when changing results. Speed changes tempo while preserving tuning, and the Pitch control transposes playback independently.
 
-## Model choices
+## Get started
+
+Clone, download or unzip Riffroom into a writable folder, then use the launcher for your computer. First setup needs internet access to install dependencies and build the interface. Model weights download separately when first used.
+
+### macOS · Apple Silicon
+
+Double-click **`Riffroom.command`**, or run this from the project folder:
+
+```bash
+./start.sh
+```
+
+The launcher prepares the project and opens **http://127.0.0.1:8765**. Keep the Terminal window open; Control-C stops the server. Launching again reuses the running app.
+
+An M1 or newer Mac is required; 16 GB memory is recommended. The app targets macOS 14 or later with a compatible MLX wheel. Existing validation used an M1 Mac on macOS 27; the pinned dependencies may need adjustment on older macOS versions. Intel Macs are outside the current supported path.
+
+macOS keeps the full Apple Silicon stack and prefers MLX for the curated models. Setup accepts Python 3.11–3.13 and creates a standard virtual environment in `.env`; Conda is not required. If Python, Node.js/npm or FFmpeg/ffprobe is missing, it uses Homebrew to install the missing tool. If Homebrew is missing, it prints installation guidance. Apple's command-line tools are requested only if a package needs them.
+
+### Linux · experimental
+
+Install Python 3.11–3.13 with venv/pip support, Node.js 22+ with npm, and FFmpeg including ffprobe using your distribution's instructions. Then, from the project folder:
+
+```bash
+bash start.sh
+```
+
+Linux uses `scripts/setup_portable.py` and `requirements-core-lock.txt` to prepare the core app without installing MLX. It reports missing system tools rather than installing them for you.
+
+### Windows · experimental
+
+Install Python 3.11–3.13 with the Python launcher or PATH option, Node.js 22+ with npm, and FFmpeg with both `ffmpeg.exe` and `ffprobe.exe` on PATH. Reopen PowerShell, navigate to the project folder, and run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1
+```
+
+`Riffroom.ps1` delegates to `start.ps1`, which uses the same portable/core setup as Linux. The execution-policy override applies only to this invocation; it does not change machine-wide policy. No administrator shell is required. Add `-NoBrowser` to start without opening a browser.
+
+**Linux and Windows need fresh-host validation of both launch and song splitting.** The current model catalog still limits validated splitting capabilities to macOS ARM64, so a successful core launch does not enable splitting on these platforms. The portable splitting engine is a separate, explicit installation in Model Manager; the source launchers do not install it. See [validation notes](docs/validation.md#cross-platform-source-launcher-mvp) for the remaining checks.
+
+### Setup checks and limits
+
+Later launches reuse `.env` and refresh dependencies/builds when the setup fingerprint changes. Do not copy `.env` between machines or operating systems.
+
+To inspect prerequisites without installing packages, building or starting the server:
+
+```bash
+# macOS or Linux
+bash start.sh --check
+```
+
+```powershell
+# Windows
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1 -Check
+```
+
+Uploads are limited to **512 MB and 20 minutes**. Decoded audio and stems use substantially more memory and disk than an MP3. The browser holds the selected result in memory, so shorter tracks and fewer tabs help on a 16 GB machine. A full song can take several minutes on an M1; progress reports stages, not a promised completion time.
+
+## Choosing a splitting method
+
+These curated choices are available through the Apple Silicon setup. Use Model Manager to explore other entries and manage the models in your selection menus; availability depends on your platform and installed tools.
 
 | Model | Outputs | When to use it |
 |---|---|---|
@@ -45,34 +109,20 @@ Model research, primary sources, and weight licensing are in [docs/models.md](do
 - `data/tracks/<id>/track.json`: track metadata and completed run references.
 - `data/tracks/<id>/runs/<run-id>/`: model outputs, waveforms and diagnostic log.
 - `data/models/`: downloaded/converted weights, reusable across songs.
+- `data/runtimes/`: separately installed portable splitting engine, when requested in Model Manager.
 - `.env/`: isolated, project-local standard Python virtual environment.
 
-Deleting a track removes its Riffroom copy and results. It never touches the source file you imported. Back up `data/tracks` to preserve your library; browser local storage holds mixer preferences. `RIFFROOM_DATA=/absolute/path ./start.sh` selects a different data folder before launch.
+Deleting a track removes its Riffroom copy and results. It never touches the source file you imported. Back up `data/tracks` to preserve your library; browser local storage holds mixer preferences. Set `RIFFROOM_DATA` before launch to select another data folder: `RIFFROOM_DATA=/absolute/path ./start.sh` on macOS/Linux, or `$env:RIFFROOM_DATA = "C:\path\to\data"` in PowerShell before running the Windows launcher.
 
-Models require internet for the initial download. Once their weights/configs are cached, normal separation runs locally. Cancelling a job keeps previous successful results and does not publish partial stems. Download files are committed atomically so interrupted downloads can be retried. Converted weights can occupy several GB; the four prepared profiles currently use roughly 3 GB.
+Models require internet for the initial download. Once their weights/configs are cached, normal separation runs locally. Cancelling a job keeps previous successful results and does not publish partial stems. Download files are committed atomically so interrupted downloads can be retried. Converted weights can occupy several GB; the four prepared curated profiles used roughly 3 GB on the development Mac. Other models and the optional portable engine need additional space.
 
 The server listens only on `127.0.0.1`. It rejects unexpected hostnames and cross-origin mutations. It is a single-user local app, not an authenticated network service.
 
-## Fresh installation
-
-Riffroom currently requires an Apple Silicon Mac (M1 or newer); 16 GB memory is recommended. It targets macOS 14 or later with a compatible MLX wheel and was verified on the supplied M1 / macOS 27 machine. The lockfile reflects this Mac and may require adjustment on older macOS versions.
-
-Clone, download, or unzip Riffroom, then double-click `Riffroom.command`. You can also run `./start.sh` from Terminal. No separate setup command is required.
-
-Riffroom uses a standard Python virtual environment inside `.env` and does not require Conda. It accepts Python 3.11, 3.12, or 3.13. If Python, Node.js/npm, or FFmpeg/ffprobe is missing, the launcher uses Homebrew to install only the missing tool. If Homebrew itself is missing, the launcher shows its official installation command and asks you to double-click `Riffroom.command` again afterward. Apple's command-line tools are only requested if a package actually needs them.
-
-First-time setup installs the pinned Python dependencies and npm lockfile, keeps the development checks available in this source checkout, and builds the UI. Later launches automatically refresh setup after dependency manifests change. An existing working `.env` is reused. Setup uses the SDK returned by `xcrun`, when available, to avoid a mismatched beta SDK/compiler. Model weights download when each profile is first used. A full song can take several minutes on an M1; there is no fake percentage or promised completion time.
-
-The Python package now separates its core web/audio dependencies from an optional `mlx` dependency group. This is
-an import and packaging boundary for future portable installs, not a Windows or Linux release. In this phase the
-existing `setup.sh`/launcher path still installs `requirements-lock.txt`, which remains the complete tested Apple
-Silicon stack including MLX, Demucs, Torch and Torchaudio. Cross-platform setup scripts come in a later phase.
-
-Limits: 512 MB uploads and 20-minute tracks. Decoded audio/stems can use substantially more disk and memory than an MP3. The browser decodes one selected result into memory. Shorter tracks and fewer simultaneous tabs are preferable on a 16 GB Mac.
-
 ## Development
 
-The stack is **Python/FastAPI + React/TypeScript/Vite + Web Audio + MLX**, with FFmpeg for decoding. Python suits the ML ecosystem; TypeScript keeps UI and audio state explicit. One production server serves both UI and API.
+The stack is **Python/FastAPI + React/TypeScript/Vite + Web Audio**, with FFmpeg for decoding and MLX for the primary Apple Silicon splitting path. The portable engine uses a separate managed environment. Python suits the ML ecosystem; TypeScript keeps UI and audio state explicit. One production server serves both UI and API.
+
+The commands below use the macOS/Linux environment layout; on Windows, the Python executable is `.env\Scripts\python.exe`. The macOS setup includes development tools; core-only installs need the `dev` extra for backend checks.
 
 ```bash
 # Backend (do not use multiple workers; the job queue is local to this process)
@@ -94,15 +144,16 @@ npm test --prefix frontend
 npm run test:e2e --prefix frontend
 ```
 
-The browser test imports an original synthetic fixture, runs the real default ML model, verifies playback/mixer/loop/storage/cancellation/downloads, and deletes that test track. It needs GPU access and initially model-download access. See [docs/architecture.md](docs/architecture.md) for extension points and [docs/validation.md](docs/validation.md) for what was verified.
+The browser test imports an original synthetic fixture, runs the real default ML model, verifies playback/mixer/loop/storage/cancellation/downloads, and deletes that test track. This workflow targets the validated Apple Silicon setup and needs GPU access and initially model-download access. See [docs/architecture.md](docs/architecture.md) for extension points and [docs/validation.md](docs/validation.md) for what was verified.
 
 ## Troubleshooting
 
 - **First separation is slow:** weights need to download and convert once. Leave the server running.
 - **Older Demucs stems sound buzzy/noisy:** the original cached-weight loader had a bug, now fixed. Select Demucs and click **Separate track** again; existing WAVs cannot be repaired in place. New workers load the corrected adapter automatically.
 - **Job fails:** open its diagnostic log in the track page. Try again, or use Demucs six stems if RoFormer exhausts memory.
-- **No sound:** press Play, check master/mute/solo controls and your Mac's output device. Browser audio needs a user click.
-- **Server was closed:** reopen `Riffroom.command`. Interrupted jobs are marked for retry; finished results remain.
+- **No sound:** press Play, check master/mute/solo controls and your computer's output device. Browser audio needs a user click.
+- **Server was closed:** run your platform’s launcher again. Interrupted jobs are marked for retry; finished results remain.
 - **Port 8765 in use:** the launcher reuses Riffroom if it owns the port; otherwise it asks you to stop the other app.
 - **SDK build error:** make sure `xcrun --sdk macosx --show-sdk-path` resolves to an SDK compatible with the selected Xcode toolchain. Setup already includes the workaround used on this Mac.
 - **Shared Homebrew on a multi-user Mac:** setup can use compatible tools that are already installed, including an unlinked supported Python. If another account owns Homebrew and a tool is missing, use that account or ask an administrator to install the tool.
+- **No splitting options on Linux/Windows:** these launchers currently prepare only the core app; model capabilities remain limited to validated macOS ARM64 execution. Fresh-host splitting validation is still pending.
