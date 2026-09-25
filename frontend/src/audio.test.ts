@@ -20,17 +20,20 @@ const soundTouchMock = vi.hoisted(() => {
       return node;
     }
   }
-  return { Node, nodes, register };
+  return { Node, nodes, register, imported: vi.fn() };
 });
 
-vi.mock("@soundtouchjs/audio-worklet", () => ({
-  SoundTouchNode: soundTouchMock.Node,
-}));
+vi.mock("@soundtouchjs/audio-worklet", () => {
+  soundTouchMock.imported();
+  return { SoundTouchNode: soundTouchMock.Node };
+});
 vi.mock("@soundtouchjs/audio-worklet/processor?url", () => ({
   default: "/assets/soundtouch-processor.js",
 }));
 
 const nodes: any[] = [];
+// Capture module evaluation before any test can trigger a dynamic import.
+const eagerlyImportedSoundTouch = soundTouchMock.imported.mock.calls.length > 0;
 let clock: any;
 class Context {
   currentTime = 0;
@@ -106,6 +109,32 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+it("imports audio helpers without evaluating the SoundTouch runtime", () => {
+  expect(eagerlyImportedSoundTouch).toBe(false);
+});
+
+it("loads stems without AudioWorklet and explains the secure origin requirement on playback", async () => {
+  vi.stubGlobal("AudioWorkletNode", undefined);
+  vi.stubGlobal("AudioContext", class extends Context {
+    constructor() {
+      super();
+      Object.assign(this, { audioWorklet: undefined });
+    }
+  });
+  const importsBefore = soundTouchMock.imported.mock.calls.length;
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  expect(clock.decodeAudioData).toHaveBeenCalledTimes(stems.length);
+  expect(player.duration).toBe(10);
+  expect(soundTouchMock.register).not.toHaveBeenCalled();
+  expect(soundTouchMock.nodes).toHaveLength(0);
+  await expect(player.play()).rejects.toThrow("localhost or HTTPS");
+  expect(soundTouchMock.imported).toHaveBeenCalledTimes(importsBefore);
+  expect(player.playing).toBe(false);
+  expect(nodes).toHaveLength(0);
+  player.dispose();
+});
+
 describe("mix routing", () => {
   it("respects volume, simultaneous solos and mute precedence", () => {
     expect(channelGain("guitar", mix)).toBe(1.5);
@@ -178,6 +207,9 @@ it("loops and accounts for speed on the shared timeline", async () => {
 it("keeps tempo and requested pitch independent", async () => {
   const player = new MixerEngine();
   await player.load(stems, new AbortController().signal);
+  expect(soundTouchMock.register).not.toHaveBeenCalled();
+  expect(soundTouchMock.nodes).toHaveLength(0);
+  await player.play();
   expect(soundTouchMock.register).toHaveBeenCalledWith(
     clock,
     "/assets/soundtouch-processor.js",
@@ -197,8 +229,9 @@ it("keeps tempo and requested pitch independent", async () => {
   expect(soundTouchMock.nodes[0].playbackRate.value).toBe(1);
   expect(soundTouchMock.nodes[0].pitchSemitones.value).toBe(2);
   player.setRate(0.5);
+  await vi.waitFor(() => expect(nodes).toHaveLength(4));
   await player.play();
-  expect(nodes.map((node) => node.playbackRate.value)).toEqual([0.5, 0.5]);
+  expect(nodes.slice(-2).map((node) => node.playbackRate.value)).toEqual([0.5, 0.5]);
   const processor = soundTouchMock.nodes.at(-1);
   expect(processor.setStretchParameters).toHaveBeenCalledWith({
     sequenceMs: 0,

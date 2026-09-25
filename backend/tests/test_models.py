@@ -21,7 +21,9 @@ from riffroom.models import (
     ExecutionVariant,
     _community_models_from_metadata,
     catalog,
+    clear_model_cache,
     community_model_id,
+    model_cache_state,
     resolve_model_variant,
     variant_for_provider,
 )
@@ -41,6 +43,90 @@ def portable_model(filename=PORTABLE_PILOT_FILENAME):
 def availability(**overrides):
     runtimes = {MLX_PROVIDER: False, PORTABLE_PROVIDER: False, **overrides}
     return lambda provider_id: runtimes.get(provider_id, False)
+
+
+def test_kimberley_vocals_is_a_trusted_curated_profile(tmp_path):
+    model = CURATED_MODELS["roformer-vocals"]
+
+    assert MODELS[model.id] is model
+    assert model.name == "RoFormer · Kimberley vocals"
+    assert model.stems == ("vocals", "instrumental")
+    assert model.architecture == "RoFormer"
+    assert model.source == "https://huggingface.co/KimberleyJSN/melbandroformer"
+    assert (model.license, model.terms_status) == ("MIT", "open")
+    assert model.variants == (
+        ExecutionVariant(MLX_PROVIDER, "vocals_mel_band_roformer.ckpt", ("macos-arm64",), True),
+    )
+    assert model.filename not in VALIDATED_PORTABLE_VARIANTS
+    rows = [row for row in catalog(tmp_path, platform_key="macos-arm64") if row["id"] == model.id]
+    assert len(rows) == 1
+    assert rows[0]["curated"] is True
+    assert rows[0]["catalog_group"] == "curated"
+    assert rows[0]["catalog_origin"] == "Riffroom curated catalog"
+    assert rows[0]["filename"] == "vocals_mel_band_roformer.ckpt"
+    assert rows[0]["provider_options"] == [MLX_PROVIDER]
+
+
+@pytest.mark.parametrize(
+    ("platform_key", "mlx_available", "compatible"),
+    [
+        ("macos-arm64", True, True),
+        ("macos-arm64", False, False),
+        ("macos-x86_64", True, False),
+        ("windows-x86_64", True, False),
+        ("windows-arm64", True, False),
+        ("linux-x86_64", True, False),
+        ("linux-arm64", True, False),
+    ],
+)
+def test_kimberley_vocals_requires_mlx_on_apple_silicon(tmp_path, platform_key, mlx_available, compatible):
+    model = CURATED_MODELS["roformer-vocals"]
+    runtimes = {MLX_PROVIDER: mlx_available, PORTABLE_PROVIDER: True}
+    selected = resolve_model_variant(model, availability(**runtimes), platform_key=platform_key)
+    assert selected == (model.variants[0] if compatible else None)
+    with pytest.raises(ValueError, match="not a trusted variant"):
+        variant_for_provider(model, PORTABLE_PROVIDER)
+    row = next(
+        row
+        for row in catalog(tmp_path, provider_availability=runtimes, platform_key=platform_key)
+        if row["id"] == model.id
+    )
+    assert row["provider"] == (MLX_PROVIDER if compatible else None)
+    assert row["supported_platforms"] == ["macos-arm64"]
+    assert row["compatibility"]["compatible"] is compatible
+    assert row["compatibility"]["platform_supported"] is (platform_key == "macos-arm64")
+
+
+def test_kimberley_vocals_owns_checkpoint_config_and_partial_downloads(tmp_path):
+    model = CURATED_MODELS["roformer-vocals"]
+    assert model.cache_cleanup_supported is True
+    assert model.cache_files == ("vocals_mel_band_roformer.ckpt", "vocals_mel_band_roformer.yaml")
+    checkpoint, config = (tmp_path / filename for filename in model.cache_files)
+    assert model_cache_state(model, tmp_path)["prepared"] is False
+    checkpoint.write_bytes(b"checkpoint fixture")
+    assert model_cache_state(model, tmp_path)["prepared"] is False
+    config.touch()
+    assert model_cache_state(model, tmp_path)["prepared"] is False
+    config.write_bytes(b"config fixture")
+    partials = [path.with_name(path.name + ".part") for path in (checkpoint, config)]
+    for path in partials:
+        path.write_bytes(b"partial fixture")
+    shared = tmp_path / "download_checks.json"
+    shared.write_bytes(b"shared fixture")
+    unrelated = tmp_path / "BS-Roformer-SW.ckpt"
+    unrelated.write_bytes(b"unrelated fixture")
+    state = model_cache_state(model, tmp_path)
+    assert state["prepared"] is True
+    assert state["cache_bytes"] == sum(path.stat().st_size for path in (checkpoint, config, *partials))
+
+    clear_model_cache(model, tmp_path)
+    clear_model_cache(model, tmp_path)
+
+    assert all(not path.exists() for path in (checkpoint, config, *partials))
+    assert model_cache_state(model, tmp_path)["prepared"] is False
+    assert model_cache_state(model, tmp_path)["cache_bytes"] == 0
+    assert shared.read_bytes() == b"shared fixture"
+    assert unrelated.read_bytes() == b"unrelated fixture"
 
 
 def test_demucs_6_prefers_mlx_then_resolves_portable_without_fallback_guessing():

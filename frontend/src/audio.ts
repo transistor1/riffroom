@@ -1,6 +1,6 @@
-import {
+import type {
   SoundTouchNode,
-  type StretchParameters,
+  StretchParameters,
 } from "@soundtouchjs/audio-worklet";
 // @ts-expect-error Vite resolves the package's documented processor asset import.
 import soundTouchProcessorUrl from "@soundtouchjs/audio-worklet/processor?url";
@@ -84,8 +84,9 @@ export class MixerEngine {
   private async initSoundTouch(ctx: AudioContext) {
     if (!ctx.audioWorklet)
       throw new Error(
-        "This browser does not support the audio processing Riffroom needs.",
+        "Riffroom's browser audio processing requires AudioWorklet. Open Riffroom on localhost or HTTPS to enable it.",
       );
+    const { SoundTouchNode } = await import("@soundtouchjs/audio-worklet");
     if (!this.soundTouchRegistered) {
       await SoundTouchNode.register(ctx, soundTouchProcessorUrl);
       this.soundTouchRegistered = true;
@@ -118,7 +119,6 @@ export class MixerEngine {
     const version = ++this.generation;
     this.buffers.clear();
     const ctx = this.init();
-    await this.initSoundTouch(ctx);
     const decoded = new Map<string, AudioBuffer>();
     // Decode sequentially to keep memory peaks bounded on 16 GB machines.
     for (const stem of stems) {

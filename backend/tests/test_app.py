@@ -54,17 +54,21 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
 
     assert response.status_code == 200
     models = response.json()
-    assert [model["id"] for model in models[:4]] == [
+    curated = [model for model in models if model["curated"]]
+    community = [model for model in models if not model["curated"]]
+    assert [model["id"] for model in curated] == [
         "demucs-6",
         "roformer-6",
         "guitar-focus",
         "demucs-ft",
+        "roformer-vocals",
     ]
-    assert len(models) > 4
+    assert community
+    assert models == curated + community
     mlx_available = is_provider_available("mlx-audio-separator")
-    assert {model["provider"] for model in models[:4]} == {"mlx-audio-separator" if mlx_available else None}
+    assert {model["provider"] for model in curated} == {"mlx-audio-separator" if mlx_available else None}
     assert all(
-        model["provider"] is None for model in models[4:] if model["provider_options"] == ["audio-separator"]
+        model["provider"] is None for model in community if model["provider_options"] == ["audio-separator"]
     )
     assert {"Demucs", "RoFormer", "MDXC"} <= {model["architecture"] for model in models}
     assert {model["terms_status"] for model in models} == {
@@ -93,12 +97,12 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         assert model["prepared"] is False
         assert model["cache_bytes"] == 0
         assert model["cache_label"] == "Downloads on first use"
-    for model in models[:4]:
+    for model in curated:
         assert model["curated"] is True
         assert model["catalog_group"] == "curated"
         assert model["catalog_origin"] == "Riffroom curated catalog"
         assert model["cache_cleanup_supported"] is True
-    for model in models[4:]:
+    for model in community:
         assert model["curated"] is False
         assert model["catalog_group"] == "community"
         assert model["terms_status"] == "unverified"
@@ -230,14 +234,18 @@ def test_curated_profiles_are_unchanged_and_community_order_is_deterministic(app
     _, client = application
 
     models = client.get("/api/models").json()
+    curated = [item for item in models if item["curated"]]
+    community = [item for item in models if not item["curated"]]
 
-    assert [(item["id"], item["filename"], item["stems"]) for item in models[:4]] == [
+    assert models == curated + community
+    assert [(item["id"], item["filename"], item["stems"]) for item in curated] == [
         ("demucs-6", "htdemucs_6s.yaml", list(CURATED_MODELS["demucs-6"].stems)),
         ("roformer-6", "BS-Roformer-SW.ckpt", list(CURATED_MODELS["roformer-6"].stems)),
         ("guitar-focus", "becruily_guitar.ckpt", list(CURATED_MODELS["guitar-focus"].stems)),
         ("demucs-ft", "htdemucs_ft.yaml", list(CURATED_MODELS["demucs-ft"].stems)),
+        ("roformer-vocals", "vocals_mel_band_roformer.ckpt", ["vocals", "instrumental"]),
     ]
-    community_order = [(item["name"].casefold(), item["filename"].casefold()) for item in models[4:]]
+    community_order = [(item["name"].casefold(), item["filename"].casefold()) for item in community]
     assert community_order == sorted(community_order)
     assert [model.id for model in filter_models()] == [item["id"] for item in models]
     assert all(model.catalog_group == "community" for model in filter_models(catalog_group="community"))

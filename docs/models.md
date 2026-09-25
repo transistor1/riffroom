@@ -10,9 +10,11 @@ The target is an M1 MacBook Air with 16 GB unified memory. Independent guitar, d
 
 **Guitar specialist: becruily's Mel-Band RoFormer (`becruily_guitar.ckpt`).** Its published config targets Guitar and Other. It is a useful additional listening comparison for removing or learning guitar parts, at the cost of losing separate bass/drum faders in that result. The author's stated permission covers non-commercial use; this is not a claim of OSI-open weight licensing. [Author's model/config](https://huggingface.co/becruily/mel-band-roformer-guitar/blob/main/config_guitar_becruily.yaml), [author's licensing statement](https://huggingface.co/becruily/mel-band-roformer-guitar/discussions/9).
 
+**Vocal specialist: Kimberley Jensen's Mel-Band RoFormer (`vocals_mel_band_roformer.ckpt`).** The curated `roformer-vocals` profile adds vocals/instrumental separation for vocal practice and accompaniment, with MIT-licensed weights. It uses the upstream registry entry “Roformer Model: MelBand Roformer | Vocals by Kimberley Jensen” and `vocals_mel_band_roformer.yaml`. Its validated support is currently MLX on `macos-arm64` only; portable support requires separate execution validation. [Author's model](https://huggingface.co/KimberleyJSN/melbandroformer).
+
 ## Provider-aware catalog
 
-The catalog has two layers. The four hand-reviewed profiles remain the curated, recommended set and are the only
+The catalog has two layers. The five hand-reviewed profiles form the curated, recommended set and are the only
 cards on the import page. The Model Manager always exposes three execution-validated portable community profiles
 whose logical metadata is trusted server-side. When installed, the optional `mlx-audio-separator` 0.1.7 wheel adds
 the broader community layer generated from its bundled metadata. The API compares every profile's declared platform capabilities with a
@@ -125,7 +127,7 @@ are future work.
 architectures. Upstream publishes validation evidence and scoped MLX/PyTorch performance comparisons, but those
 are not M1 timings or guarantees. This app uses one worker and batch size one to limit memory use. PyTorch is
 installed for first-run checkpoint conversion. The package declares this complete inference stack in its optional
-`mlx` dependency group, and the four curated profiles remain visible but report runtime-unavailable if that group
+`mlx` dependency group, and the five curated profiles remain visible but report runtime-unavailable if that group
 is missing. [Runtime source](https://github.com/ssmall256/mlx-audio-separator).
 
 The original Demucs Python package is pinned to 4.0.1 with Torch/Torchaudio 2.8.0 for compatibility with the tested conversion path. Inference uses MLX, rather than PyTorch's MPS implementation.
@@ -158,7 +160,8 @@ Cache reporting and removal cover only exact model-specific files under Riffroom
 root. For the two Demucs profiles this means the profile YAML, its specifically named top-level `.th`
 checkpoints, and its `demucs-mlx/<profile>.safetensors` plus JSON conversion metadata. For BS-RoFormer SW it
 means `BS-Roformer-SW.ckpt` and `BS-Roformer-SW.yaml`; for guitar focus it means
-`becruily_guitar.ckpt` and `config_guitar_becruily.yaml`. Exact `.part` files left by an interrupted atomic
+`becruily_guitar.ckpt` and `config_guitar_becruily.yaml`; for Kimberley vocals it means
+`vocals_mel_band_roformer.ckpt` and `vocals_mel_band_roformer.yaml`. Exact `.part` files left by an interrupted atomic
 download are also attributed to their model for size reporting and cleanup.
 
 Community cache accounting uses only checkpoint and config basenames explicitly present in `models.json`, under

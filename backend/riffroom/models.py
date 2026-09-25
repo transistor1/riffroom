@@ -159,6 +159,19 @@ CURATED_MODELS = {
                 "demucs-mlx/htdemucs_ft_config.json",
             ),
         ),
+        ModelProfile(
+            "roformer-vocals",
+            "RoFormer · Kimberley vocals",
+            ("vocals", "instrumental"),
+            "Kimberley Jensen's Mel-Band RoFormer separates vocals from the instrumental backing for vocal practice and accompaniment.",
+            "Vocal specialist",
+            "MIT",
+            "https://huggingface.co/KimberleyJSN/melbandroformer",
+            "RoFormer",
+            "open",
+            (_mlx_variant("vocals_mel_band_roformer.ckpt"),),
+            ("vocals_mel_band_roformer.ckpt", "vocals_mel_band_roformer.yaml"),
+        ),
     )
 }
 
