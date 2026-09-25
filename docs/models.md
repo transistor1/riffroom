@@ -42,18 +42,31 @@ filename, path, URL, Python module or other user-supplied loading instruction is
 precedence if a generated catalog entry ever collides.
 
 All profiles support `macos-arm64`. A logical profile owns its model ID and user-facing metadata once, plus an
-ordered tuple of explicitly validated execution variants. Ordinary profiles have one `mlx-audio-separator`
-variant. Portable routing is a server-owned allowlist, not a consequence of appearing in either runtime's
+ordered tuple of explicitly validated execution variants. Most curated profiles have one `mlx-audio-separator`
+variant; `demucs-6` has MLX first and a validated portable variant second. Portable routing is a server-owned
+allowlist, not a consequence of appearing in either runtime's
 registry. The `audio-separator` 0.47.0 allowlist contains exactly these execution-validated filenames:
 
+- `htdemucs_6s.yaml`: Guitar, Vocals, Drums, Bass, Piano and Other; a second variant on curated `demucs-6`.
 - `UVR-MDX-NET-Inst_HQ_5.onnx`: Instrumental and Vocals.
 - `MDX23C-DrumSep-aufr33-jarredou.ckpt`: Kick, Snare, Toms, HH, Ride and Crash.
 - `mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt`: Vocals and Instrumental.
 
-Each remains one logical community catalog row with its existing generated model ID and has only a validated
-`audio-separator` variant. Its checkpoint terms remain unverified. The two additions were run through the managed
-runtime on a generated six-second stereo WAV; the CLI exited successfully and every stem declared by the trusted
-bundled metadata was produced as a readable stereo WAV. Registry presence alone did not qualify any model, and no
+The Phase 3D2 follow-up tested both curated Demucs candidates with a generated six-second stereo WAV on Apple
+Silicon. `audio-separator` imports DiffQ symbols while loading its Demucs modules even though the unquantized
+`htdemucs_6s` checkpoint does not exercise the quantized-state branches. The real `diffq 0.2.4` package built and
+imported after Torch when the build selected the installed Command Line Tools; no compatibility shim is used.
+`htdemucs_6s.yaml` then exited successfully and produced exactly its six trusted stems as readable 44.1 kHz
+stereo WAVs. Its existing curated `demucs-6` row now has MLX first/preferred and `audio-separator` second, without
+changing its logical ID, metadata, trusted stems, or prepared-file ownership. The `htdemucs_ft` attempt again
+could not resolve `dl.fbaipublicfiles.com` to download its missing checkpoint, so it remains unvalidated and
+MLX-only. Portable support remains declared `macos-arm64` only until Windows and Linux are tested independently.
+
+Each of the three community entries remains one logical catalog row with its existing generated model ID and has
+only a validated `audio-separator` variant. Its checkpoint terms remain unverified. The two additions were run
+through the managed runtime on a generated six-second stereo WAV; the CLI exited successfully and every stem
+declared by the trusted bundled metadata was produced as a readable stereo WAV. Registry presence alone did not
+qualify any model, and no
 other curated or community filename is routed to the portable provider. MLX variants are not inferred for these
 logical models from MLX registry presence. Their filenames, friendly names, architectures and stem lists are now
 copied into the server-owned catalog so they remain available when MLX is not installed. When bundled metadata is
@@ -77,11 +90,26 @@ explicit portable runtime installation described below; it does not preload mode
 The portable runtime is isolated from Riffroom's pinned MLX environment at
 `data/runtimes/audio-separator/venv`. Installation is an explicit Model Manager action and always installs exactly
 `audio-separator[cpu]==0.47.0`; the main project dependency and lock files do not include it. Riffroom installs the
-dependencies required by the validated portable paths separately, omitting the unused `diffq` source build and the
-unused, x86_64-only library bundled by `samplerate==0.1.0`. Riffroom creates a temporary venv with its running
-Python, installs and verifies the expected CLI with argv-only subprocesses, then atomically promotes it. A valid
+dependencies required by the validated portable paths separately, installing Torch before the real `diffq>=0.2`
+source package. On macOS, DiffQ's build selects the installed Command Line Tools when available. The unused,
+x86_64-only library bundled by `samplerate==0.1.0` remains excluded. Riffroom creates a temporary venv with its
+running Python, verifies the CLI and imports `Separator`, `DemucsSeparator`, and `HTDemucs`
+without downloading models, then atomically promotes it. A valid
 `RIFFROOM_AUDIO_SEPARATOR_BIN` administrator override takes precedence, followed by `PATH`, then the managed copy.
 Package names, versions, executable paths and provider classes are not accepted from HTTP or model metadata.
+
+Managed installations also carry a Riffroom recipe revision, separate from the displayed upstream `0.47.0`.
+Dependency recipe changes invalidate older managed installations even if that upstream version is unchanged.
+In particular, an old `VERSION` marker containing only `0.47.0` requires explicit reinstallation in Model Manager
+to obtain the real DiffQ dependency. Installation writes the revision-aware marker only after all dependencies
+and execution-stack import and CLI checks succeed; a failed replacement restores the previous runtime. Discovery uses the marker without
+running Python imports or subprocess checks on each status request.
+
+Recipe 2 explicitly installs `audioread>=3`: audio-separator's `spec_utils` imports it directly,
+but upstream does not declare it and librosa 1.0 no longer supplies it transitively. The recipe also
+includes upstream's conditional `audioop-lts>=0.2.1` dependency for Python 3.13, where the standard
+library removed `audioop` used by pydub. Recipe 1 and version-only markers are stale and require
+explicit reinstallation. Import verification failures preserve the previous managed runtime.
 
 Catalog compatibility separates host capability from runtime readiness and computes both across validated
 variants only. On Apple Silicon each allowlisted model selects `audio-separator` when the portable runtime is ready. Otherwise

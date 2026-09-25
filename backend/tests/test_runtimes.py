@@ -2,9 +2,13 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from riffroom.runtimes import (
+    _AUDIO_SEPARATOR_IMPORT_CHECK,
+    _MANAGED_MARKER,
+    AUDIO_SEPARATOR_DEPENDENCIES,
+    AUDIO_SEPARATOR_DIFFQ_DEPENDENCY,
     AUDIO_SEPARATOR_PACKAGE,
-    AUDIO_SEPARATOR_PILOT_DEPENDENCIES,
     AUDIO_SEPARATOR_VERSION,
     AudioSeparatorRuntime,
     _retarget_console_script,
@@ -60,11 +64,40 @@ def test_override_precedes_path_and_managed_runtime(tmp_path):
         executable_resolver=lambda name: (_ for _ in ()).throw(AssertionError(name)),
     )
     make_executable(venv_audio_separator_path(managed.venv))
-    (managed.runtime / "VERSION").write_text(AUDIO_SEPARATOR_VERSION)
+    (managed.runtime / "VERSION").write_text(_MANAGED_MARKER)
 
     assert managed.executable() == override
     assert managed.status()["available"] is True
     assert managed.status()["managed_installed"] is True
+
+
+@pytest.mark.parametrize("marker", [AUDIO_SEPARATOR_VERSION, "0.47.0\nrecipe=1", _MANAGED_MARKER])
+def test_managed_detection_requires_current_recipe_without_running_commands(tmp_path, marker):
+    def unexpected_run(*args, **kwargs):
+        pytest.fail("Discovery must not run subprocesses")
+
+    runtime = AudioSeparatorRuntime(
+        tmp_path, environ={}, executable_resolver=lambda name: None, runner=unexpected_run
+    )
+    executable = make_executable(venv_audio_separator_path(runtime.venv))
+    (runtime.runtime / "VERSION").write_text(marker + "\n")
+    current = marker == _MANAGED_MARKER
+    assert runtime.managed_executable() == (executable if current else None)
+    assert runtime.status()["managed_installed"] is current
+    assert runtime.status()["available"] is current
+    assert runtime.status()["version"] == "0.47.0"
+    if current:
+        assert runtime.start_install()["installing"] is False
+
+
+@pytest.mark.parametrize("marker", [AUDIO_SEPARATOR_VERSION, _MANAGED_MARKER])
+def test_path_precedes_managed_runtime_regardless_of_recipe(tmp_path, marker):
+    external = make_executable(tmp_path / "external")
+    runtime = AudioSeparatorRuntime(tmp_path, environ={}, executable_resolver=lambda name: str(external))
+    make_executable(venv_audio_separator_path(runtime.venv))
+    (runtime.runtime / "VERSION").write_text(marker)
+    assert runtime.executable() == external
+    assert runtime.status()["available"] is True
 
 
 def test_invalid_explicit_override_fails_closed(tmp_path):
@@ -100,31 +133,64 @@ def test_valid_override_never_starts_a_managed_install(tmp_path):
     assert calls == []
 
 
-def test_managed_install_is_atomic_and_uses_the_pinned_package(tmp_path):
+def test_managed_install_is_atomic_and_uses_the_pinned_package(tmp_path, monkeypatch):
     calls = []
+    command_line_tools = tmp_path / "CommandLineTools"
+    command_line_tools.mkdir()
+    monkeypatch.setattr("riffroom.runtimes._MACOS_COMMAND_LINE_TOOLS", command_line_tools)
+    monkeypatch.setattr("riffroom.runtimes.sys.platform", "darwin")
+    run = successful_runner(calls)
+
+    def runner(argv, **kwargs):
+        # Neither staging nor the published copy is marked current during verification.
+        if argv[-1] == "--help" or argv[1:2] == ["-c"]:
+            assert not (Path(argv[0]).parents[2] / "VERSION").exists()
+        if len(calls) < 6:
+            assert (runtime.runtime / "stale").read_text() == "old"
+        return run(argv, **kwargs)
+
     runtime = AudioSeparatorRuntime(
-        tmp_path, environ={}, executable_resolver=lambda name: None, runner=successful_runner(calls)
+        tmp_path, environ={}, executable_resolver=lambda name: None, runner=runner
     )
-    runtime.runtime.mkdir(parents=True)
+    make_executable(venv_audio_separator_path(runtime.venv))
+    (runtime.runtime / "VERSION").write_text(AUDIO_SEPARATOR_VERSION)
     (runtime.runtime / "stale").write_text("old")
 
-    asyncio.run(runtime._install())
+    async def exercise():
+        assert runtime.start_install()["installing"] is True
+        await runtime._task
+
+    asyncio.run(exercise())
 
     assert runtime.managed_executable() == venv_audio_separator_path(runtime.venv)
+    assert (runtime.runtime / "VERSION").read_text() == _MANAGED_MARKER + "\n"
     assert not (runtime.runtime / "stale").exists()
     assert calls[0][0][1:3] == ["-m", "venv"]
     assert calls[1][0][-2:] == ["--no-deps", AUDIO_SEPARATOR_PACKAGE]
-    assert calls[2][0][-len(AUDIO_SEPARATOR_PILOT_DEPENDENCIES) :] == list(AUDIO_SEPARATOR_PILOT_DEPENDENCIES)
-    assert calls[3][0][0].endswith("/venv/bin/audio-separator")
-    assert calls[3][0][1:] == ["--help"]
-    assert calls[4][0] == [str(venv_audio_separator_path(runtime.venv)), "--help"]
-    assert all(kwargs == {"check": False, "shell": False} for _, kwargs in calls)
+    assert calls[2][0][-len(AUDIO_SEPARATOR_DEPENDENCIES) :] == list(AUDIO_SEPARATOR_DEPENDENCIES)
+    assert calls[3][0][-1] == AUDIO_SEPARATOR_DIFFQ_DEPENDENCY
+    assert calls[3][0][:4] == [calls[2][0][0], "-m", "pip", "install"]
+    assert calls[4][0][0].endswith("/venv/bin/audio-separator")
+    assert calls[4][0][1:] == ["--help"]
+    assert calls[5][0] == [calls[2][0][0], "-c", _AUDIO_SEPARATOR_IMPORT_CHECK]
+    assert "from audio_separator.separator import Separator" in calls[5][0][2]
+    assert "architectures.demucs_separator import DemucsSeparator" in calls[5][0][2]
+    assert "demucs.htdemucs import HTDemucs" in calls[5][0][2]
+    assert calls[6][0] == [str(venv_audio_separator_path(runtime.venv)), "--help"]
+    assert (runtime.runtime / "VERSION").read_text() == "0.47.0\nrecipe=2\n"
+    assert all(kwargs["check"] is False and kwargs["shell"] is False for _, kwargs in calls)
+    assert all("env" not in kwargs for _, kwargs in calls[:3])
+    assert calls[3][1]["env"]["DEVELOPER_DIR"] == str(command_line_tools)
     assert not any(path.name.endswith((".tmp", ".backup")) for path in runtime.root.iterdir())
 
 
-def test_pilot_install_omits_unneeded_nonportable_dependencies():
-    dependencies = " ".join(AUDIO_SEPARATOR_PILOT_DEPENDENCIES).lower()
+def test_runtime_installs_real_diffq_after_torch_and_omits_samplerate():
+    dependencies = " ".join(AUDIO_SEPARATOR_DEPENDENCIES).lower()
 
+    assert "audioread>=3" in AUDIO_SEPARATOR_DEPENDENCIES
+    assert 'audioop-lts>=0.2.1; python_version >= "3.13"' in AUDIO_SEPARATOR_DEPENDENCIES
+    assert "torch" in dependencies
+    assert AUDIO_SEPARATOR_DIFFQ_DEPENDENCY == "diffq>=0.2"
     assert "diffq" not in dependencies
     assert "samplerate" not in dependencies
 
@@ -138,6 +204,7 @@ def test_failed_build_reports_bounded_cause_without_build_paths(tmp_path):
         if calls == 1:
             venv = Path(argv[-1])
             make_executable(venv_python_path(venv))
+        if calls < 4:
             return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
         return SimpleNamespace(
             returncode=1,
@@ -156,7 +223,7 @@ def test_failed_build_reports_bounded_cause_without_build_paths(tmp_path):
 
     error = runtime.status()["error"]
     assert error == (
-        "Portable runtime installation failed while installing the pinned package. "
+        "Portable runtime installation failed while installing the Demucs dependency. "
         "A required package wheel could not be built (diffq)."
     )
     assert "/Library" not in error
@@ -182,7 +249,8 @@ def test_failed_install_cleans_temp_and_preserves_existing_runtime(tmp_path):
     assert [path for path in runtime.root.iterdir()] == [runtime.runtime]
 
 
-def test_failed_published_verification_restores_previous_runtime(tmp_path):
+@pytest.mark.parametrize("failed_call", [4, 5, 6, 7])
+def test_failed_replacement_restores_previous_runtime(tmp_path, failed_call):
     calls = []
 
     def runner(argv, **kwargs):
@@ -191,19 +259,32 @@ def test_failed_published_verification_restores_previous_runtime(tmp_path):
             venv = Path(argv[-1])
             make_executable(venv_python_path(venv))
             make_executable(venv_audio_separator_path(venv))
-        return SimpleNamespace(returncode=1 if len(calls) == 5 else 0)
+        return SimpleNamespace(
+            returncode=1 if len(calls) == failed_call else 0,
+            stderr=b"ModuleNotFoundError: No module named 'audioread'" if failed_call == 6 else b"",
+        )
 
     runtime = AudioSeparatorRuntime(
         tmp_path, environ={}, executable_resolver=lambda name: None, runner=runner
     )
-    runtime.runtime.mkdir(parents=True)
+    old_cli = make_executable(venv_audio_separator_path(runtime.venv))
+    old_content = old_cli.read_bytes()
+    (runtime.runtime / "VERSION").write_text(AUDIO_SEPARATOR_VERSION)
     sentinel = runtime.runtime / "previous"
     sentinel.write_text("keep")
 
     asyncio.run(runtime._install())
 
     assert sentinel.read_text() == "keep"
+    assert old_cli.read_bytes() == old_content
+    assert (runtime.runtime / "VERSION").read_text() == AUDIO_SEPARATOR_VERSION
+    assert runtime.managed_executable() is None
     assert runtime.status()["error"]
+    if failed_call == 6:
+        assert runtime.status()["error"] == (
+            "Portable runtime installation failed while verifying the separator and Demucs imports. "
+            "The installed runtime is missing a required Python module."
+        )
     assert not any(path.name.endswith((".tmp", ".backup")) for path in runtime.root.iterdir())
 
 

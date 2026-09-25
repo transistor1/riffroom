@@ -19,6 +19,7 @@ from riffroom.models import (
     filter_models,
 )
 from riffroom.providers import is_provider_available
+from riffroom.runtimes import _MANAGED_MARKER
 
 
 @pytest.fixture
@@ -112,10 +113,21 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
 
 def test_portable_allowlist_routing_cleanup_and_runtime_compatibility(application, monkeypatch):
     app, client = application
-    portable_models = [model for model in MODELS.values() if model.filename in VALIDATED_PORTABLE_VARIANTS]
-    pilot = next(model for model in portable_models if model.filename == "UVR-MDX-NET-Inst_HQ_5.onnx")
+    portable_models = [
+        model
+        for model in MODELS.values()
+        if any(variant.provider_id == "audio-separator" for variant in model.variants)
+    ]
+    portable_only = [model for model in portable_models if not model.curated]
+    demucs_6 = MODELS["demucs-6"]
+    pilot = next(model for model in portable_only if model.filename == "UVR-MDX-NET-Inst_HQ_5.onnx")
 
-    assert {model.filename for model in portable_models} == set(VALIDATED_PORTABLE_VARIANTS)
+    assert {
+        variant.filename
+        for model in portable_models
+        for variant in model.variants
+        if variant.provider_id == "audio-separator"
+    } == set(VALIDATED_PORTABLE_VARIANTS)
     assert pilot.name == "MDX-Net Model: UVR-MDX-NET Inst HQ 5"
     assert pilot.stems == ("instrumental", "vocals")
     assert all(
@@ -123,14 +135,19 @@ def test_portable_allowlist_routing_cleanup_and_runtime_compatibility(applicatio
         and all(variant.validated for variant in model.variants)
         and model.supported_platforms == ("macos-arm64",)
         and model.cache_cleanup_supported is False
-        for model in portable_models
+        for model in portable_only
     )
+    assert [variant.provider_id for variant in demucs_6.variants] == [
+        "mlx-audio-separator",
+        "audio-separator",
+    ]
+    assert demucs_6.cache_cleanup_supported is True
     assert all(
         len(model.variants) == 1 and model.variants[0].provider_id == "mlx-audio-separator"
         for model in MODELS.values()
-        if model.filename not in VALIDATED_PORTABLE_VARIANTS
+        if model not in portable_models
     )
-    for model in portable_models:
+    for model in portable_only:
         cleanup = client.delete(f"/api/models/{model.id}/cache")
         assert cleanup.status_code == 409
         assert "portable model" in cleanup.json()["detail"]
@@ -147,7 +164,7 @@ def test_portable_allowlist_routing_cleanup_and_runtime_compatibility(applicatio
     executable = app.state.audio_separator_runtime.runtime / "venv" / "bin" / "audio-separator"
     executable.parent.mkdir(parents=True)
     executable.touch(mode=0o755)
-    (app.state.audio_separator_runtime.runtime / "VERSION").write_text("0.47.0")
+    (app.state.audio_separator_runtime.runtime / "VERSION").write_text(_MANAGED_MARKER)
     available = {item["id"]: item for item in client.get("/api/models").json()}
     for model in portable_models:
         row = available[model.id]
@@ -175,9 +192,17 @@ def test_runtime_status_and_install_endpoints_do_not_expose_paths(tmp_path):
         return type("Result", (), {"returncode": 0})()
 
     app.state.audio_separator_runtime._runner = runner
+    stale_runtime = app.state.audio_separator_runtime.runtime
+    stale_cli = stale_runtime / "venv" / "bin" / "audio-separator"
+    stale_cli.parent.mkdir(parents=True)
+    stale_cli.write_text("#!/usr/bin/env python3\n")
+    stale_cli.chmod(0o755)
+    (stale_runtime / "VERSION").write_text("0.47.0")
     with TestClient(app) as client:
         initial = client.get("/api/runtimes/audio-separator")
         assert initial.status_code == 200
+        assert initial.json()["managed_installed"] is False
+        assert initial.json()["available"] is False
         assert set(initial.json()) == {
             "id",
             "display_name",
@@ -195,8 +220,9 @@ def test_runtime_status_and_install_endpoints_do_not_expose_paths(tmp_path):
                 break
         assert status["available"] is True
         assert status["managed_installed"] is True
+        assert status["version"] == "0.47.0"
         assert str(tmp_path) not in str(status)
-    assert len(calls) == 5
+    assert len(calls) == 6
 
 
 def test_curated_profiles_are_unchanged_and_community_order_is_deterministic(application):

@@ -9,6 +9,7 @@ import pytest
 from riffroom.models import (
     COMMUNITY_MODELS,
     CURATED_MODELS,
+    DEMUCS_6_FILENAME,
     MLX_PROVIDER,
     MODELS,
     PORTABLE_COMMUNITY_MODELS,
@@ -42,25 +43,33 @@ def availability(**overrides):
     return lambda provider_id: runtimes.get(provider_id, False)
 
 
-def test_single_variant_resolution_keeps_existing_models_on_mlx():
+def test_demucs_6_prefers_mlx_then_resolves_portable_without_fallback_guessing():
     model = CURATED_MODELS["demucs-6"]
 
-    selected = resolve_model_variant(
+    preferred = resolve_model_variant(
         model,
-        availability(**{MLX_PROVIDER: True}),
+        availability(**{MLX_PROVIDER: True, PORTABLE_PROVIDER: True}),
         platform_key="macos-arm64",
     )
+    portable = resolve_model_variant(
+        model,
+        availability(**{PORTABLE_PROVIDER: True}),
+        platform_key="macos-arm64",
+    )
+    unavailable = resolve_model_variant(model, availability(), platform_key="macos-arm64")
 
-    assert len(model.variants) == 1
-    assert selected == model.variants[0]
-    assert selected.provider_id == MLX_PROVIDER
-    assert selected.validated is True
+    assert [variant.provider_id for variant in model.variants] == [MLX_PROVIDER, PORTABLE_PROVIDER]
+    assert preferred == model.variants[0]
+    assert portable == model.variants[1]
+    assert portable.filename == DEMUCS_6_FILENAME
+    assert portable == VALIDATED_PORTABLE_VARIANTS[DEMUCS_6_FILENAME]
+    assert unavailable is None
     assert model.cache_cleanup_supported is True
     assert model.cache_files
 
 
 def test_validated_portable_allowlist_is_explicit_and_portable_only():
-    assert tuple(VALIDATED_PORTABLE_VARIANTS) == PORTABLE_FILENAMES
+    assert tuple(VALIDATED_PORTABLE_VARIANTS) == (DEMUCS_6_FILENAME, *PORTABLE_FILENAMES)
     assert all(
         variant == ExecutionVariant(PORTABLE_PROVIDER, filename, ("macos-arm64",), True)
         for filename, variant in VALIDATED_PORTABLE_VARIANTS.items()

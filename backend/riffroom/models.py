@@ -81,6 +81,7 @@ def current_platform_key() -> str:
 SIX_STEMS = ("guitar", "vocals", "drums", "bass", "piano", "other")
 MLX_PROVIDER = "mlx-audio-separator"
 PORTABLE_PROVIDER = "audio-separator"
+DEMUCS_6_FILENAME = "htdemucs_6s.yaml"
 
 
 def _mlx_variant(filename: str) -> ExecutionVariant:
@@ -100,9 +101,12 @@ CURATED_MODELS = {
             "https://github.com/facebookresearch/demucs",
             "Demucs",
             "open",
-            (_mlx_variant("htdemucs_6s.yaml"),),
             (
-                "htdemucs_6s.yaml",
+                _mlx_variant(DEMUCS_6_FILENAME),
+                ExecutionVariant(PORTABLE_PROVIDER, DEMUCS_6_FILENAME, ("macos-arm64",), True),
+            ),
+            (
+                DEMUCS_6_FILENAME,
                 "5c90dfd2-34c22ccb.th",
                 "demucs-mlx/htdemucs_6s.safetensors",
                 "demucs-mlx/htdemucs_6s_config.json",
@@ -171,6 +175,7 @@ PORTABLE_VALIDATION_ORIGIN = (
 VALIDATED_PORTABLE_VARIANTS = {
     filename: ExecutionVariant(PORTABLE_PROVIDER, filename, ("macos-arm64",), True)
     for filename in (
+        DEMUCS_6_FILENAME,
         PORTABLE_PILOT_FILENAME,
         PORTABLE_DRUMSEP_FILENAME,
         PORTABLE_KARAOKE_FILENAME,

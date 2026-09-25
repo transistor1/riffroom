@@ -16,12 +16,18 @@ from uuid import uuid4
 AUDIO_SEPARATOR_ID = "audio-separator"
 AUDIO_SEPARATOR_DISPLAY_NAME = "Portable audio-separator runtime"
 AUDIO_SEPARATOR_VERSION = "0.47.0"
+# Bump whenever Riffroom's dependency recipe or installation procedure changes,
+# even if the upstream package version stays the same. Legacy markers had no revision.
+AUDIO_SEPARATOR_MANAGED_REVISION = "2"
+_MANAGED_MARKER = f"{AUDIO_SEPARATOR_VERSION}\nrecipe={AUDIO_SEPARATOR_MANAGED_REVISION}"
 AUDIO_SEPARATOR_PACKAGE = f"audio-separator[cpu]=={AUDIO_SEPARATOR_VERSION}"
-# audio-separator declares two dependencies that the one portable MDX/ONNX pilot
-# does not import: diffq has no macOS arm64 wheel and samplerate 0.1.0 bundles an
-# x86_64-only dylib. Installing the remaining declared dependencies separately
-# avoids a local compiler requirement and a knowingly unusable binary package.
-AUDIO_SEPARATOR_PILOT_DEPENDENCIES = (
+# samplerate 0.1.0 bundles an x86_64-only dylib and is not imported by the
+# execution-validated paths. Install the remaining dependencies separately so
+# diffq's source build happens only after its Torch dependency is available.
+AUDIO_SEPARATOR_DEPENDENCIES = (
+    # Imported directly by spec_utils; librosa >=1 no longer brings it transitively.
+    "audioread>=3",
+    'audioop-lts>=0.2.1; python_version >= "3.13"',
     "beartype<0.19.0,>=0.18.5",
     "einops>=0.7",
     "julius>=0.2",
@@ -43,10 +49,19 @@ AUDIO_SEPARATOR_PILOT_DEPENDENCIES = (
     "tqdm",
     "onnxruntime>=1.17",
 )
+AUDIO_SEPARATOR_DIFFQ_DEPENDENCY = "diffq>=0.2"
+# Exercise lazy execution imports without constructing a separator or downloading models.
+_AUDIO_SEPARATOR_IMPORT_CHECK = (
+    "import audioread; "
+    "from audio_separator.separator import Separator; "
+    "from audio_separator.separator.architectures.demucs_separator import DemucsSeparator; "
+    "from audio_separator.separator.uvr_lib_v5.demucs.htdemucs import HTDemucs"
+)
 AUDIO_SEPARATOR_ENV = "RIFFROOM_AUDIO_SEPARATOR_BIN"
 _VERSION_FILE = "VERSION"
 _MAX_ERROR_LENGTH = 300
 _PACKAGE_NAME = re.compile(r"Failed building wheel for ([A-Za-z0-9_.-]+)", re.IGNORECASE)
+_MACOS_COMMAND_LINE_TOOLS = Path("/Library/Developer/CommandLineTools")
 
 
 class CompletedProcessLike(Protocol):
@@ -128,7 +143,7 @@ class AudioSeparatorRuntime:
             version = version_file.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeError):
             return None
-        return executable if version == AUDIO_SEPARATOR_VERSION and _valid_executable(executable) else None
+        return executable if version == _MANAGED_MARKER and _valid_executable(executable) else None
 
     def executable(self) -> Path | None:
         """Resolve administrator override, PATH, then the managed copy."""
@@ -165,15 +180,19 @@ class AudioSeparatorRuntime:
         self._task = asyncio.create_task(self._install())
         return self.status()
 
-    async def _run(self, argv: list[str]) -> CompletedProcessLike:
+    async def _run(self, argv: list[str], *, env: Mapping[str, str] | None = None) -> CompletedProcessLike:
         if self._runner is not None:
-            result = self._runner(argv, check=False, shell=False)
+            kwargs: dict[str, object] = {"check": False, "shell": False}
+            if env is not None:
+                kwargs["env"] = env
+            result = self._runner(argv, **kwargs)
             return await result if inspect.isawaitable(result) else result
 
         self._process = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         try:
             stdout, stderr = await self._process.communicate()
@@ -228,9 +247,15 @@ class AudioSeparatorRuntime:
             return "The installed runtime launcher is invalid."
         return None
 
-    async def _checked_run(self, argv: list[str], phase: str) -> None:
+    async def _checked_run(
+        self,
+        argv: list[str],
+        phase: str,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
         try:
-            result = await self._run(argv)
+            result = await self._run(argv, env=env)
         except OSError as exc:
             detail = (
                 "There is not enough free disk space."
@@ -275,16 +300,33 @@ class AudioSeparatorRuntime:
                     "-m",
                     "pip",
                     "install",
-                    *AUDIO_SEPARATOR_PILOT_DEPENDENCIES,
+                    *AUDIO_SEPARATOR_DEPENDENCIES,
                 ],
-                "installing the pilot dependencies",
+                "installing the runtime dependencies",
+            )
+            diffq_environment = None
+            if sys.platform == "darwin" and _MACOS_COMMAND_LINE_TOOLS.is_dir():
+                diffq_environment = {**os.environ, "DEVELOPER_DIR": str(_MACOS_COMMAND_LINE_TOOLS)}
+            await self._checked_run(
+                [
+                    str(child_python),
+                    "-m",
+                    "pip",
+                    "install",
+                    AUDIO_SEPARATOR_DIFFQ_DEPENDENCY,
+                ],
+                "installing the Demucs dependency",
+                env=diffq_environment,
             )
             cli = venv_audio_separator_path(temporary_venv)
             if not _valid_executable(cli):
                 raise RuntimeError("Portable runtime installation did not produce the expected executable.")
             await self._checked_run([str(cli), "--help"], "verifying the installed runtime")
+            await self._checked_run(
+                [str(child_python), "-c", _AUDIO_SEPARATOR_IMPORT_CHECK],
+                "verifying the separator and Demucs imports",
+            )
             _retarget_console_script(cli, venv_python_path(self.venv))
-            (temporary / _VERSION_FILE).write_text(AUDIO_SEPARATOR_VERSION + "\n", encoding="utf-8")
 
             if self.runtime.exists():
                 backup = self.root / f".{AUDIO_SEPARATOR_ID}-{uuid4().hex}.backup"
@@ -296,6 +338,7 @@ class AudioSeparatorRuntime:
                     [str(venv_audio_separator_path(self.venv)), "--help"],
                     "verifying the published runtime",
                 )
+                (self.runtime / _VERSION_FILE).write_text(_MANAGED_MARKER + "\n", encoding="utf-8")
             except BaseException:
                 if self.runtime.exists():
                     shutil.rmtree(self.runtime, ignore_errors=True)
@@ -336,8 +379,10 @@ class AudioSeparatorRuntime:
 
 __all__ = [
     "AUDIO_SEPARATOR_ENV",
+    "AUDIO_SEPARATOR_DEPENDENCIES",
+    "AUDIO_SEPARATOR_DIFFQ_DEPENDENCY",
     "AUDIO_SEPARATOR_PACKAGE",
-    "AUDIO_SEPARATOR_PILOT_DEPENDENCIES",
+    "AUDIO_SEPARATOR_MANAGED_REVISION",
     "AUDIO_SEPARATOR_VERSION",
     "AudioSeparatorRuntime",
     "venv_audio_separator_path",

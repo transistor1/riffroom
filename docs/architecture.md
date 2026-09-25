@@ -78,8 +78,9 @@ manifest. Add its fixed ID to the trusted registry rather than loading a module 
 input select arbitrary checkpoint files, paths, URLs, Python modules or executable code.
 
 Compatibility is capability-driven across a profile's validated variants, not inferred from an architecture name
-or a UI operating-system check. Existing non-portable production profiles keep their `mlx-audio-separator` Apple
-Silicon execution paths. The three portable-routed profiles are validated only through `audio-separator`; presence
+or a UI operating-system check. Existing production profiles keep their `mlx-audio-separator` Apple Silicon
+execution paths, and `demucs-6` now has a second, lower-priority `audio-separator` variant. The three
+portable-only community profiles are validated only through `audio-separator`; presence
 in MLX's bundled registry is not treated as runtime proof. The allowlist grows only after the fixed managed runtime
 successfully separates generated audio and produces every trusted expected stem as a readable WAV. The portable
 provider is available only when its administrator override, `PATH` command, or managed CLI resolves successfully.
@@ -89,16 +90,44 @@ start the large install; opening Model Manager never installs software. Windows 
 by the installer, but Riffroom setup, the portable profiles, and end-to-end validation remain `macos-arm64` only in
 this phase.
 
+The Phase 3D2 follow-up resolved the Demucs import blocker without a shim. `audio-separator` imports
+`DiffQuantizer`, `UniformQuantizer`, and `restore_quantized_state` at module load; the validated `htdemucs_6s`
+checkpoint is not quantized, but the real `diffq` package is still required for those imports. Installing
+`diffq>=0.2` after Torch succeeded on Apple Silicon when its source build used the installed Command Line Tools.
+With `samplerate` still absent, `htdemucs_6s.yaml` then separated a generated six-second stereo WAV and produced
+exactly guitar, vocals, drums, bass, piano and other as readable stereo WAVs. The existing `demucs-6` logical
+model therefore keeps MLX first and adds `audio-separator` second, with the same model ID and trusted stems.
+`htdemucs_ft.yaml` remains MLX-only: its missing checkpoint again could not be downloaded because the worker
+could not resolve `dl.fbaipublicfiles.com`, so it did not reach inference. All portable validation remains
+declared only for `macos-arm64`; Windows and Linux remain unclaimed until separately tested.
+
 The install endpoint accepts no package, version, executable, or provider input. It always creates a temporary
 venv with the running Riffroom Python, installs exactly `audio-separator[cpu]==0.47.0`, and installs the pinned
-package's allowlist-required dependencies separately. The validated portable paths do not install `diffq`, whose source
-build requires a local compiler because it has no Apple Silicon wheel, or `samplerate==0.1.0`, whose wheel bundles
-an x86_64-only library. Neither package is imported by the allowlisted paths. The installer checks the expected CLI with
-`--help` and atomically promotes the directory. A failure removes the temporary directory without replacing an
-existing runtime, and exposes only a bounded, path-free failure category. App shutdown cancels an in-progress
-installer subprocess. Jobs pass a server-resolved executable to workers through
+package's allowlist-required dependencies separately. It installs Torch and the curated runtime dependencies
+first, then builds the real `diffq>=0.2` package. On macOS the build selects
+`/Library/Developer/CommandLineTools` when present; this avoids coupling the source build to an unlicensed or
+incompatible full-Xcode selection while preserving the normal environment elsewhere. `samplerate==0.1.0` stays
+excluded because its wheel bundles an x86_64-only library and none of the validated paths import it. The installer
+checks the expected CLI with `--help`, then imports `Separator`, `DemucsSeparator`, and `HTDemucs`
+before atomically promoting the directory. These imports require no model downloads. A failure removes the temporary
+directory without replacing an existing runtime, and exposes only a bounded, path-free failure category. App
+shutdown cancels an in-progress installer subprocess. Jobs pass a server-resolved executable to workers through
 `RIFFROOM_AUDIO_SEPARATOR_BIN` only when the process environment does not already contain an explicit
 administrator override; global `PATH` is not changed.
+
+Managed runtime discovery checks a durable `VERSION` marker containing both the upstream version and a
+Riffroom install-recipe revision (`recipe=2`). Bump that revision whenever the dependency recipe or installation
+procedure changes, even when upstream remains at `0.47.0`. A legacy version-only marker is stale and permits
+explicit reinstallation from Model Manager. The new marker is written only after dependency installation
+(including real DiffQ), staged execution-stack imports, and both staged and published CLI checks succeed. Replacement keeps the old runtime as
+a backup until verification and marker writing finish, restoring it on failure. Status performs no import or
+subprocess probes and continues to report upstream version `0.47.0`.
+
+Recipe 2 explicitly installs `audioread>=3`: audio-separator's `spec_utils` imports it directly,
+but upstream does not declare it and librosa 1.0 no longer supplies it transitively. The recipe also
+includes upstream's conditional `audioop-lts>=0.2.1` dependency for Python 3.13, where the standard
+library removed `audioop` used by pydub. Recipe 1 and version-only markers are stale and require
+explicit reinstallation. Import verification failures preserve the previous managed runtime.
 
 Prepared-file state is intentionally narrower than total provider disk use. Each curated profile declares the
 exact checkpoint, config and/or converted MLX files that Riffroom owns beneath its configured `data/models`
