@@ -60,6 +60,7 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         "demucs-6",
         "roformer-6",
         "guitar-focus",
+        "mvsep-guitar",
         "demucs-ft",
         "roformer-vocals",
     ]
@@ -242,6 +243,7 @@ def test_curated_profiles_are_unchanged_and_community_order_is_deterministic(app
         ("demucs-6", "htdemucs_6s.yaml", list(CURATED_MODELS["demucs-6"].stems)),
         ("roformer-6", "BS-Roformer-SW.ckpt", list(CURATED_MODELS["roformer-6"].stems)),
         ("guitar-focus", "becruily_guitar.ckpt", list(CURATED_MODELS["guitar-focus"].stems)),
+        ("mvsep-guitar", "bs_mega_53stem_guitar_mvsep.ckpt", ["guitar", "other"]),
         ("demucs-ft", "htdemucs_ft.yaml", list(CURATED_MODELS["demucs-ft"].stems)),
         ("roformer-vocals", "vocals_mel_band_roformer.ckpt", ["vocals", "instrumental"]),
     ]

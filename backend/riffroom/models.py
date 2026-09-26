@@ -139,6 +139,20 @@ CURATED_MODELS = {
             ("becruily_guitar.ckpt", "config_guitar_becruily.yaml"),
         ),
         ModelProfile(
+            "mvsep-guitar",
+            "RoFormer · MVSep Mega 53 guitar",
+            ("guitar", "other"),
+            "A general guitar specialist separating all guitars from the rest of the band. "
+            "Produces guitar and other, not separate lead and rhythm guitars.",
+            "Guitar specialist",
+            "Checkpoint terms unverified",
+            "https://huggingface.co/noblebarkrr/BS-Roformer-MVSep-Mega-53-stems",
+            "RoFormer",
+            "unverified",
+            (_mlx_variant("bs_mega_53stem_guitar_mvsep.ckpt"),),
+            ("bs_mega_53stem_guitar_mvsep.ckpt", "bs_mega_53stem_guitar_mvsep_config.yaml"),
+        ),
+        ModelProfile(
             "demucs-ft",
             "Demucs · detailed 4 stems",
             ("vocals", "drums", "bass", "other"),

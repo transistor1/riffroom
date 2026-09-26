@@ -14,6 +14,22 @@ from riffroom.models import MODELS
 
 TRUSTED_MODEL_FILENAMES = frozenset(profile.filename for profile in MODELS.values())
 
+# Exact server-owned sources for custom RoFormer checkpoints absent from the bundled registry.
+CUSTOM_ROFORMER_DOWNLOADS = {
+    "becruily_guitar.ckpt": (
+        "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main",
+        "config_guitar_becruily.yaml",
+        "Mel-Band RoFormer Guitar by becruily",
+        "",
+    ),
+    "bs_mega_53stem_guitar_mvsep.ckpt": (
+        "https://huggingface.co/noblebarkrr/BS-Roformer-MVSep-Mega-53-stems/resolve/main/v1",
+        "bs_mega_53stem_guitar_mvsep_config.yaml",
+        "BS-RoFormer MVSep Mega 53 Guitar",
+        "?download=true",
+    ),
+}
+
 
 class LocalSeparator(Separator):
     def load_model(self, model_filename="model_bs_roformer_ep_317_sdr_12.9755.ckpt"):
@@ -77,14 +93,13 @@ class LocalSeparator(Separator):
         raise RuntimeError(f"Could not download {target.name} after 3 attempts: {last_error}") from last_error
 
     def download_model_files(self, model_filename):
-        if model_filename == "becruily_guitar.ckpt":
+        if model_filename in CUSTOM_ROFORMER_DOWNLOADS:
             root = Path(self.model_file_dir)
-            base = "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main"
-            config = "config_guitar_becruily.yaml"
-            self.download_file_if_not_exists(f"{base}/{model_filename}", root / model_filename)
-            self.download_file_if_not_exists(f"{base}/{config}", root / config)
+            base, config, friendly_name, query = CUSTOM_ROFORMER_DOWNLOADS[model_filename]
+            self.download_file_if_not_exists(f"{base}/{model_filename}{query}", root / model_filename)
+            self.download_file_if_not_exists(f"{base}/{config}{query}", root / config)
             self.model_is_uvr_vip = False
-            self.model_friendly_name = "Mel-Band RoFormer Guitar by becruily"
+            self.model_friendly_name = friendly_name
             return model_filename, "MDXC", self.model_friendly_name, str(root / model_filename), config
         return super().download_model_files(model_filename)
 

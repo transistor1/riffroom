@@ -67,6 +67,7 @@ def test_kimberley_vocals_is_a_trusted_curated_profile(tmp_path):
     assert rows[0]["provider_options"] == [MLX_PROVIDER]
 
 
+@pytest.mark.parametrize("model_id", ["roformer-vocals", "mvsep-guitar"])
 @pytest.mark.parametrize(
     ("platform_key", "mlx_available", "compatible"),
     [
@@ -79,8 +80,10 @@ def test_kimberley_vocals_is_a_trusted_curated_profile(tmp_path):
         ("linux-arm64", True, False),
     ],
 )
-def test_kimberley_vocals_requires_mlx_on_apple_silicon(tmp_path, platform_key, mlx_available, compatible):
-    model = CURATED_MODELS["roformer-vocals"]
+def test_specialists_require_mlx_on_apple_silicon(
+    tmp_path, model_id, platform_key, mlx_available, compatible
+):
+    model = CURATED_MODELS[model_id]
     runtimes = {MLX_PROVIDER: mlx_available, PORTABLE_PROVIDER: True}
     selected = resolve_model_variant(model, availability(**runtimes), platform_key=platform_key)
     assert selected == (model.variants[0] if compatible else None)
@@ -97,10 +100,17 @@ def test_kimberley_vocals_requires_mlx_on_apple_silicon(tmp_path, platform_key, 
     assert row["compatibility"]["platform_supported"] is (platform_key == "macos-arm64")
 
 
-def test_kimberley_vocals_owns_checkpoint_config_and_partial_downloads(tmp_path):
-    model = CURATED_MODELS["roformer-vocals"]
+@pytest.mark.parametrize(
+    ("model_id", "cache_files"),
+    [
+        ("roformer-vocals", ("vocals_mel_band_roformer.ckpt", "vocals_mel_band_roformer.yaml")),
+        ("mvsep-guitar", ("bs_mega_53stem_guitar_mvsep.ckpt", "bs_mega_53stem_guitar_mvsep_config.yaml")),
+    ],
+)
+def test_specialists_own_checkpoint_config_and_partial_downloads(tmp_path, model_id, cache_files):
+    model = CURATED_MODELS[model_id]
     assert model.cache_cleanup_supported is True
-    assert model.cache_files == ("vocals_mel_band_roformer.ckpt", "vocals_mel_band_roformer.yaml")
+    assert model.cache_files == cache_files
     checkpoint, config = (tmp_path / filename for filename in model.cache_files)
     assert model_cache_state(model, tmp_path)["prepared"] is False
     checkpoint.write_bytes(b"checkpoint fixture")
@@ -422,3 +432,19 @@ def test_unrelated_community_model_does_not_gain_portable_variant():
     unrelated = models[community_model_id("unrelated.onnx")]
 
     assert all(variant.provider_id != PORTABLE_PROVIDER for variant in unrelated.variants)
+
+
+def test_mvsep_guitar_is_a_trusted_general_guitar_profile():
+    model = CURATED_MODELS["mvsep-guitar"]
+    assert MODELS[model.id] is model
+    assert model.name == "RoFormer · MVSep Mega 53 guitar"
+    assert model.name != CURATED_MODELS["guitar-focus"].name
+    assert model.stems == ("guitar", "other")
+    assert model.architecture == "RoFormer"
+    assert model.badge == "Guitar specialist"
+    assert model.source == "https://huggingface.co/noblebarkrr/BS-Roformer-MVSep-Mega-53-stems"
+    assert (model.license, model.terms_status) == ("Checkpoint terms unverified", "unverified")
+    assert model.variants == (
+        ExecutionVariant(MLX_PROVIDER, "bs_mega_53stem_guitar_mvsep.ckpt", ("macos-arm64",), True),
+    )
+    assert model.filename not in VALIDATED_PORTABLE_VARIANTS
