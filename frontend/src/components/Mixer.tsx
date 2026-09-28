@@ -22,8 +22,6 @@ import {
 import { MixerEngine } from "../audio";
 import {
   time,
-  type BeatTimeline,
-  type MetronomeSettings,
   type Channel,
   type Mix,
   type Run,
@@ -86,20 +84,6 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
       return defaults(stems);
     }
   });
-  const [timeline, setTimeline] = useState<BeatTimeline | null>(null);
-  const [beatError, setBeatError] = useState(false);
-  const [metronome, setMetronome] = useState<MetronomeSettings>(() => {
-    const defaults: MetronomeSettings = { enabled: false, volume: 0.5, subdivision: 1, accent: true, countIn: false };
-    try {
-      const saved = JSON.parse(localStorage.getItem("riffroom:metronome") ?? "null");
-      if (saved) return { ...defaults,
-        volume: Number.isFinite(saved.volume) ? Math.max(0, Math.min(1, saved.volume)) : defaults.volume,
-        subdivision: [1, 2, 4].includes(saved.subdivision) ? saved.subdivision : 1,
-        accent: saved.accent !== false, countIn: saved.countIn === true,
-      };
-    } catch { /* Storage may be disabled. */ }
-    return defaults;
-  });
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [playing, setPlaying] = useState(false);
@@ -114,23 +98,6 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
     engine.current = player;
     const controller = new AbortController();
     player.setMix(mix);
-    player.setMetronome(metronome);
-    fetch(`/api/tracks/${track.id}/beats`, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Beat analysis failed");
-        const value: BeatTimeline = await response.json();
-        if (value.version !== 1 || !Number.isFinite(value.bpm) || value.bpm < 55 || value.bpm > 200 ||
-            !Number.isFinite(value.confidence) || value.confidence < 0.25 || value.confidence > 1 ||
-            !Array.isArray(value.beats) || value.beats.length < 2 || value.beats.length > 10000 ||
-            value.beats.some((beat, i) => !Number.isFinite(beat) || beat < 0 ||
-              beat >= track.duration || (i > 0 && beat <= value.beats[i - 1])))
-          throw new Error("No reliable beat timeline");
-        if (!controller.signal.aborted) {
-          setTimeline(value);
-          player.setBeatTimeline(value);
-        }
-      })
-      .catch(() => { if (!controller.signal.aborted) setBeatError(true); });
     player
       .load(stems, controller.signal)
       .then(() => {
@@ -162,13 +129,6 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
       /* Storage may be disabled. */
     }
   }, [mix, key]);
-  useEffect(() => {
-    engine.current?.setMetronome(metronome);
-    try {
-      const { enabled: _enabled, ...settings } = metronome;
-      localStorage.setItem("riffroom:metronome", JSON.stringify(settings));
-    } catch { /* Storage may be disabled. */ }
-  }, [metronome]);
   const toggle = useCallback(() => {
     if (!loaded) return;
     const player = engine.current!;
@@ -284,8 +244,6 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
             peaks={track.peaks}
             progress={position / track.duration}
             color="#cfdfa3"
-            beats={timeline?.beats}
-            duration={track.duration}
           />
           <input
             aria-label="Seek"
@@ -318,26 +276,6 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
           <span>{time(track.duration)}</span>
         </div>
         <div className="practice-controls">
-          <div className="metronome-controls" aria-label="Metronome controls">
-            <button className={`small-button ${metronome.enabled ? "selected" : ""}`}
-              disabled={!timeline} aria-pressed={metronome.enabled}
-              onClick={() => setMetronome({ ...metronome, enabled: !metronome.enabled })}>Metronome</button>
-            <span className="metronome-status" role="status">{beatError ? "Metronome unavailable" : timeline
-              ? `${Math.round(timeline.bpm)} BPM${rate !== 1 ? ` · ${Math.round(timeline.bpm * rate)} at ${rate}×` : ""}`
-              : "Analyzing beats…"}</span>
-            <label>Click volume <input aria-label="Metronome volume" type="range" min="0" max="1" step="0.01"
-              value={metronome.volume} onChange={(e) => setMetronome({ ...metronome, volume: +e.target.value })} /></label>
-            <label>Subdivision <select value={metronome.subdivision}
-              onChange={(e) => setMetronome({ ...metronome, subdivision: +e.target.value as 1 | 2 | 4 })}>
-              <option value="1">Beat</option><option value="2">1/8</option><option value="4">1/16</option>
-            </select></label>
-            <label title="Approximate accent every fourth detected beat; not true downbeat recognition">
-              <input type="checkbox" checked={metronome.accent}
-                onChange={(e) => setMetronome({ ...metronome, accent: e.target.checked })} /> Accent 1 (every 4)
-            </label>
-            <label><input type="checkbox" checked={metronome.countIn}
-              onChange={(e) => setMetronome({ ...metronome, countIn: e.target.checked })} /> Count-in</label>
-          </div>
           <div className="loop-controls">
             <button
               className={

@@ -18,18 +18,6 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
                    → final compressor → speakers
 ```
 
-## Smart metronome
-
-The beat timeline is derived from the normalized original track and cached in the track's `beats.json`, so original playback and every separation result use the same detected beats. Detection is heuristic; sparse attacks, syncopation, and tempo changes can reduce accuracy, and half- or double-tempo estimates remain possible. **Accent 1** means every fourth detected beat, starting with the first; it is not real downbeat or time-signature recognition. Refinement from a separated drum stem and live timing grading are future work.
-
-`MixerEngine` schedules oscillator envelopes on the same `AudioContext` clock as the stem sources. A 25 ms timer fills a 150 ms lookahead window; the timer does not trigger audible clicks directly. Song-time intervals are divided by playback rate, and subdivisions interpolate between adjacent detected beats. Only detected beats can receive accents. Clicks feed the final limiter with metronome and master volume applied, bypassing the stem pitch processor.
-
-Tempo selection uses the strongest autocorrelation candidate. Fast candidates above 110 BPM can resolve to half tempo (at least 55 BPM) when the doubled period has competitive correlation and the fast grid has consistently alternating strong/weak attacks. Opening attacks seed phase before local tracking follows drift. An analyzer revision in the cache triggers recomputation of older results without changing the timeline schema version.
-
-The four count-in clicks precede the upcoming detected beat on its local grid. Audio can start between the fourth click and that beat; song position stays fixed during pre-roll. Count-in spacing and phase both scale with playback rate. Maximum click peak gain is 0.9 times master volume, independent of stem gains, through the final limiter. These timing and tempo heuristics still require listening against real recordings.
-
-Count-in schedules four separate pre-roll clicks on the detected beat grid, adjusted for playback rate. The stem start is delayed only as long as needed to preserve phase with the upcoming detected beat, while the song offset itself remains fixed. Song scheduling stays at or after the future source start; its scheduling marker cannot move backwards during pre-roll. Loop windows split at B and resume at A with exclusive window ends to avoid duplicate events. Pause, seek, rate changes, and loop changes cancel queued oscillators, disconnect their gains, and clear the scheduler before resynchronizing; transport changes resume without another count-in. Disabling the metronome leaves stem transport unchanged.
-
 ## Boundaries
 
 - `backend/riffroom/app.py`: HTTP routes, local-origin protection, upload handling, static frontend.

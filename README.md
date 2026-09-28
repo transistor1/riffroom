@@ -28,10 +28,6 @@ Song splitting is approximate: expect some instrument bleed and artifacts, espec
 
 Mix levels, mutes, and solos are remembered per result in this browser. Track audio and all completed separation results persist on disk. Loop points, play position, speed, and master output currently reset when changing results. Speed changes tempo while preserving tuning, and the Pitch control transposes playback independently.
 
-The smart metronome follows detected beats from the original track, cached in `beats.json` and shared across separation results. Enable it for beat clicks, choose subdivisions of 2 or 4, or select a four-click count-in before playback. Click timing follows playback speed and A–B loops. **Accent 1** accents every fourth detected beat; it does not recognize real musical downbeats or the song's time signature.
-
-Beat detection is heuristic: quiet passages, syncopation, and changing tempo can produce missed or misplaced beats, including half- or double-tempo estimates. Treat the clicks as a practice aid and check them against the recording. Drum-stem refinement and live timing grading are future work.
-
 ## Get started
 
 Clone, download or unzip Riffroom into a writable folder, then use the launcher for your computer. First setup needs internet access to install dependencies and build the interface. Model weights download separately when first used.
@@ -133,7 +129,6 @@ Model research, primary sources, and weight licensing are in [docs/models.md](do
 ## Local files and privacy
 
 - `data/tracks/<id>/original.wav`: imported, decoded 44.1 kHz stereo copy.
-- `data/tracks/<id>/beats.json`: cached beat timeline derived from the original track.
 - `data/tracks/<id>/track.json`: track metadata and completed run references.
 - `data/tracks/<id>/runs/<run-id>/`: model outputs, waveforms and diagnostic log.
 - `data/models/`: downloaded/converted weights, reusable across songs.

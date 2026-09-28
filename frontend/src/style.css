@@ -1853,18 +1853,3 @@ h1 em {
   color: var(--muted);
   font-size: 0.78rem;
 }
-
-.metronome-controls {
-  display: flex;
-  flex: 1 0 100%;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-  font-size: 12px;
-}
-.metronome-controls label { display: flex; align-items: center; gap: 6px; }
-.metronome-controls input[type="range"] { width: 76px; }
-.metronome-controls input[type="checkbox"] { accent-color: #cfdfa3; }
-.metronome-controls select { color: inherit; background: #242b29; border-radius: 4px; padding: 4px; }
-.metronome-status { opacity: 0.75; }
-.practice-controls { flex-wrap: wrap; }
