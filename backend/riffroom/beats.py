@@ -13,6 +13,7 @@ import numpy as np
 import soundfile as sf
 
 VERSION = 1
+ANALYZER_REVISION = 2
 
 
 def validate_timeline(value):
@@ -66,11 +67,30 @@ def analyze_beats(path: Path):
     # Smooth over timing jitter without spreading attacks in the final timeline.
     smooth = np.convolve(onset, [0.25, 0.5, 1, 0.5, 0.25], mode="same")
     scores = np.array([np.dot(smooth[:-lag], smooth[lag:]) for lag in lags])
-    # Prefer the shorter period among similarly strong candidates (120 over 60).
-    candidates = np.flatnonzero(scores >= scores.max() * 0.92)
-    period = float(lags[candidates[0]])
-    phase_scores = [onset[p::round(period)].sum() for p in range(round(period))]
+    best = int(np.argmax(scores))
+    period = float(lags[best])
+    # Seed phase from the opening beats; later tempo drift must not shift the
+    # initial grid away from the opening attacks.
+    phase_scores = [smooth[p:round(8 * period):round(period)].sum() for p in range(round(period))]
     phase = float(np.argmax(phase_scores))
+    # A fast grid may follow eighth notes. Require both a competitive slower
+    # correlation and consistent alternating strength before choosing half tempo.
+    if 60 * fps / period > 110 and 60 * fps / (2 * period) >= 55:
+        slower = np.flatnonzero(abs(lags - 2 * period) <= 2)
+        slow_best = int(slower[np.argmax(scores[slower])])
+        radius = max(2, round(period * 0.18))
+        grid = [float(np.max(onset[max(0, p - radius):min(len(onset), p + radius + 1)]))
+                for p in range(round(phase), len(onset), round(period))]
+        pairs = np.asarray(grid[:len(grid) // 2 * 2]).reshape(-1, 2)
+        if len(pairs) >= 4:
+            means = pairs.mean(axis=0)
+            strong = int(np.argmax(means))
+            weak = 1 - strong
+            if (scores[slow_best] >= 0.8 * scores[best]
+                    and means[strong] > 1.25 * means[weak]
+                    and np.mean(pairs[:, strong] > 1.15 * pairs[:, weak]) >= 0.7):
+                phase += strong * period
+                period = float(lags[slow_best])
     beats = []
     strengths = []
     predicted = phase
@@ -104,10 +124,13 @@ def cached_beats(folder: Path):
     """Called in a worker thread; publish the cache with an atomic rename."""
     path = folder / "beats.json"
     try:
-        return validate_timeline(json.loads(path.read_text()))
+        cached = validate_timeline(json.loads(path.read_text()))
+        if cached.get("analyzer_revision") == ANALYZER_REVISION:
+            return cached
     except (OSError, ValueError, TypeError):
         pass
     timeline = validate_timeline(analyze_beats(folder / "original.wav"))
+    timeline["analyzer_revision"] = ANALYZER_REVISION
     temporary = folder / f"beats-{uuid4().hex}.tmp"
     try:
         temporary.write_text(json.dumps(timeline, allow_nan=False))

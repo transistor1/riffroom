@@ -481,6 +481,46 @@ describe("smart metronome", () => {
     expect(node.stop).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    [0, 0, 1],
+    [0, 0, 0.5],
+    [0.2, 0, 1],
+    [0.2, 0, 0.5],
+    [0.2, 1.35, 1],
+    [0.2, 1.35, 0.5],
+  ])(
+    "phases count-in for first beat %s, offset %s, rate %s",
+    async (phase, offset, rate) => {
+      const beats = Array.from({ length: 20 }, (_, i) => phase + i * 0.5);
+      player.setBeatTimeline({ version: 1, bpm: 120, confidence: 1, beats });
+      player.setRate(rate);
+      player.seek(offset);
+      player.setMetronome({ ...settings, countIn: true });
+      await player.play();
+      const upcoming = beats.find((beat) => beat >= offset)!;
+      const interval = 0.5 / rate;
+      const start = 0.04 + (2 - (upcoming - offset)) / rate;
+      expectTimes(Array.from({ length: 4 }, (_, i) => 0.04 + i * interval));
+      expect(nodes[0].start.mock.calls[0][0]).toBeCloseTo(start);
+      expect(nodes[0].start.mock.calls[0][1]).toBe(offset);
+      advanceAudioTo(start - 0.01);
+      expect(player.position()).toBe(offset);
+      advanceAudioTo(0.04 + 5 * interval);
+      expectTimes(Array.from({ length: 6 }, (_, i) => 0.04 + i * interval));
+      expect(times()[4]).toBeCloseTo(start + (upcoming - offset) / rate);
+    },
+  );
+
+  it("schedules a louder maximum click independently of stem channel gains", async () => {
+    player.setMix({ guitar: { volume: 0, muted: true, solo: false } });
+    player.setMaster(1);
+    player.setMetronome({ ...settings, volume: 1 });
+    await player.play();
+    expect(
+      oscillators[0].gain.gain.linearRampToValueAtTime,
+    ).toHaveBeenCalledWith(0.9, 0.042);
+  });
+
   it("disabling the metronome cancels scheduled clicks", async () => {
     await player.play();
     const stale = [...oscillators];

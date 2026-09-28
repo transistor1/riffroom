@@ -105,7 +105,7 @@ export class MixerEngine {
     node.frequency.value = accent ? 1500 : 1000;
     gain.gain.setValueAtTime(0, when);
     gain.gain.linearRampToValueAtTime(
-      this.metronome.volume * this.masterVolume * 0.35,
+      this.metronome.volume * this.masterVolume * 0.9,
       when + 0.002,
     );
     gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.035);
@@ -122,12 +122,24 @@ export class MixerEngine {
     node.stop(when + 0.04);
   }
 
-  private localInterval() {
+  private countInTiming() {
     const beats = this.timeline?.beats ?? [];
-    const next = beats.findIndex((beat) => beat > this.offset);
+    const next = beats.findIndex((beat) => beat >= this.offset);
     const index =
-      next < 0 ? Math.max(0, beats.length - 2) : Math.max(0, next - 1);
-    return beats[index + 1] - beats[index] || 60 / (this.timeline?.bpm || 120);
+      next < 0
+        ? Math.max(0, beats.length - 2)
+        : beats[next] === this.offset
+          ? Math.min(next, beats.length - 2)
+          : Math.max(0, next - 1);
+    const interval =
+      beats[index + 1] - beats[index] || 60 / (this.timeline?.bpm || 120);
+    const untilBeat = next < 0 ? 0 : beats[next] - this.offset;
+    // Four grid clicks precede the upcoming beat; audio begins between clicks
+    // when the song offset itself falls between beats.
+    return {
+      interval: interval / this.rate,
+      delay: Math.max(0, 4 * interval - untilBeat) / this.rate,
+    };
   }
 
   private resyncClicks() {
@@ -310,16 +322,16 @@ export class MixerEngine {
       this.metronome.enabled &&
       this.metronome.countIn &&
       this.timeline?.beats.length
-        ? (4 * this.localInterval()) / this.rate
-        : 0;
+        ? this.countInTiming()
+        : null;
     const preRollStart = this.startedAt;
-    this.startedAt += preRoll;
+    this.startedAt += preRoll?.delay ?? 0;
     this.playing = true;
     this.resyncClicks();
     if (preRoll) {
       for (let i = 0; i < 4; i++)
         this.click(
-          preRollStart + (i * preRoll) / 4,
+          preRollStart + i * preRoll.interval,
           this.metronome.accent && i === 0,
         );
     }
