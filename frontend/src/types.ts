@@ -64,3 +64,17 @@ export const active = (track?: Track | null) =>
   !!track && ["queued", "processing"].includes(track.status);
 export const time = (seconds: number) =>
   `${Math.floor(Math.max(0, seconds) / 60)}:${String(Math.floor(Math.max(0, seconds) % 60)).padStart(2, "0")}`;
+
+export type BeatTimeline = {
+  version: 1;
+  bpm: number;
+  confidence: number;
+  beats: number[];
+};
+export type MetronomeSettings = {
+  enabled: boolean;
+  volume: number;
+  subdivision: 1 | 2 | 4;
+  accent: boolean;
+  countIn: boolean;
+};

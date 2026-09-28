@@ -4,7 +4,7 @@ import type {
 } from "@soundtouchjs/audio-worklet";
 // @ts-expect-error Vite resolves the package's documented processor asset import.
 import soundTouchProcessorUrl from "@soundtouchjs/audio-worklet/processor?url";
-import type { Mix, Stem } from "./types";
+import type { BeatTimeline, MetronomeSettings, Mix, Stem } from "./types";
 
 const standardStretchParameters: StretchParameters = {
   sequenceMs: 80,
@@ -62,6 +62,135 @@ export class MixerEngine {
   };
   private mix: Mix = {};
   private masterVolume = 0.8;
+  private timeline: BeatTimeline | null = null;
+  private metronome: MetronomeSettings = {
+    enabled: false,
+    volume: 0.5,
+    subdivision: 1,
+    accent: true,
+    countIn: false,
+  };
+  private clickNodes = new Set<OscillatorNode>();
+  private clickGains = new Map<OscillatorNode, GainNode>();
+  private clickTimer: ReturnType<typeof setInterval> | null = null;
+  private scheduledUntil = 0;
+
+  setBeatTimeline(timeline: BeatTimeline) {
+    this.timeline = timeline;
+    this.resyncClicks();
+  }
+
+  setMetronome(settings: MetronomeSettings) {
+    this.metronome = { ...settings };
+    this.resyncClicks();
+  }
+
+  private cancelClicks() {
+    if (this.clickTimer !== null) clearInterval(this.clickTimer);
+    this.clickTimer = null;
+    for (const node of this.clickNodes) {
+      node.onended = null;
+      node.stop();
+      node.disconnect();
+      this.clickGains.get(node)?.disconnect();
+    }
+    this.clickNodes.clear();
+    this.clickGains.clear();
+  }
+
+  private click(when: number, accent: boolean) {
+    const ctx = this.context!;
+    const node = ctx.createOscillator();
+    const gain = ctx.createGain();
+    node.frequency.value = accent ? 1500 : 1000;
+    gain.gain.setValueAtTime(0, when);
+    gain.gain.linearRampToValueAtTime(
+      this.metronome.volume * this.masterVolume * 0.35,
+      when + 0.002,
+    );
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.035);
+    node.connect(gain).connect(this.limiter!);
+    this.clickNodes.add(node);
+    this.clickGains.set(node, gain);
+    node.onended = () => {
+      node.disconnect();
+      gain.disconnect();
+      this.clickNodes.delete(node);
+      this.clickGains.delete(node);
+    };
+    node.start(when);
+    node.stop(when + 0.04);
+  }
+
+  private localInterval() {
+    const beats = this.timeline?.beats ?? [];
+    const next = beats.findIndex((beat) => beat > this.offset);
+    const index =
+      next < 0 ? Math.max(0, beats.length - 2) : Math.max(0, next - 1);
+    return beats[index + 1] - beats[index] || 60 / (this.timeline?.bpm || 120);
+  }
+
+  private resyncClicks() {
+    this.cancelClicks();
+    if (
+      !this.playing ||
+      !this.metronome.enabled ||
+      !this.timeline?.beats.length
+    )
+      return;
+    this.scheduledUntil = Math.max(this.context!.currentTime, this.startedAt);
+    this.scheduleClicks();
+    this.clickTimer = setInterval(() => this.scheduleClicks(), 25);
+  }
+
+  /** A short lookahead queues audio-clock events, never timer-clock clicks.
+   * Split each window at loop boundaries so partial beats/subdivisions wrap too.
+   */
+  private scheduleClicks() {
+    const ctx = this.context!;
+    const end = ctx.currentTime + 0.15;
+    // Count-in owns pre-roll; song windows must never precede the source start.
+    let cursor = Math.max(this.scheduledUntil, ctx.currentTime, this.startedAt);
+    const beats = this.timeline!.beats;
+    while (cursor < end) {
+      const elapsed = (cursor - this.startedAt) * this.rate;
+      let song = this.offset + elapsed;
+      if (this.loop.enabled && song >= this.loop.b)
+        song =
+          this.loop.a + ((song - this.loop.b) % (this.loop.b - this.loop.a));
+      const boundary = this.loop.enabled ? this.loop.b : this.duration;
+      const segmentEnd = Math.min(end, cursor + (boundary - song) / this.rate);
+      if (segmentEnd <= cursor + 1e-9) break;
+      const songEnd = song + (segmentEnd - cursor) * this.rate;
+      // Binary search to avoid scanning an entire long song every 25 ms.
+      let lo = 0,
+        hi = beats.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (beats[mid] < song) lo = mid + 1;
+        else hi = mid;
+      }
+      for (
+        let i = Math.max(0, lo - 1);
+        i < beats.length && beats[i] < songEnd;
+        i++
+      ) {
+        const divisions = i + 1 < beats.length ? this.metronome.subdivision : 1;
+        for (let sub = 0; sub < divisions; sub++) {
+          const position =
+            beats[i] +
+            (sub ? ((beats[i + 1] - beats[i]) * sub) / divisions : 0);
+          if (position >= song - 1e-9 && position < songEnd - 1e-9)
+            this.click(
+              cursor + (position - song) / this.rate,
+              this.metronome.accent && i % 4 === 0 && sub === 0,
+            );
+        }
+      }
+      cursor = segmentEnd;
+    }
+    this.scheduledUntil = Math.max(this.scheduledUntil, end, this.startedAt);
+  }
 
   private init() {
     if (!this.context) {
@@ -159,7 +288,7 @@ export class MixerEngine {
     }
     return Math.min(position, this.duration);
   }
-  async play() {
+  async play(countIn = true) {
     if (this.playing || !this.buffers.size) return;
     const ctx = this.init();
     const intent = ++this.playIntent;
@@ -176,7 +305,24 @@ export class MixerEngine {
     )
       this.offset = this.loop.a;
     this.startedAt = ctx.currentTime + 0.04;
+    const preRoll =
+      countIn &&
+      this.metronome.enabled &&
+      this.metronome.countIn &&
+      this.timeline?.beats.length
+        ? (4 * this.localInterval()) / this.rate
+        : 0;
+    const preRollStart = this.startedAt;
+    this.startedAt += preRoll;
     this.playing = true;
+    this.resyncClicks();
+    if (preRoll) {
+      for (let i = 0; i < 4; i++)
+        this.click(
+          preRollStart + (i * preRoll) / 4,
+          this.metronome.accent && i === 0,
+        );
+    }
     this.buffers.forEach((buffer, name) => {
       const source = ctx.createBufferSource();
       const gain = ctx.createGain();
@@ -194,6 +340,7 @@ export class MixerEngine {
   }
   pause() {
     this.playIntent++;
+    this.cancelClicks();
     this.offset = this.position();
     this.playing = false;
     this.sources.forEach((s) => {
@@ -209,13 +356,13 @@ export class MixerEngine {
     const resume = this.playing;
     this.pause();
     this.offset = Math.max(0, Math.min(position, this.duration));
-    if (resume) void this.play();
+    if (resume) void this.play(false);
   }
   setRate(rate: number) {
     const resume = this.playing;
     this.pause();
     this.rate = rate;
-    if (resume) void this.play();
+    if (resume) void this.play(false);
   }
   setPitch(semitones: number) {
     this.pitchSemitones = Math.max(-12, Math.min(12, semitones));
@@ -225,7 +372,7 @@ export class MixerEngine {
     const resume = this.playing;
     this.pause();
     this.loop = { ...loop, enabled: loop.enabled && loop.b - loop.a >= 0.25 };
-    if (resume) void this.play();
+    if (resume) void this.play(false);
   }
   dispose() {
     this.generation++;

@@ -630,3 +630,29 @@ def test_bind_host_trust_and_origin(monkeypatch, tmp_path, bind, host, accepted)
             assert client.post(endpoint, headers={"Origin": "http://evil.example"}).status_code == 403
             assert client.post(endpoint, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
             assert client.post(endpoint, headers={"Origin": f"http://{host}:8765"}).status_code == 404
+
+
+def test_beats_cache_is_reused_and_invalid_cache_rebuilt(application, monkeypatch):
+    import riffroom.beats as beat_module
+
+    app, client = application
+    track = upload(client)
+    folder = app.state.store.directory(track["id"])
+    calls = []
+    timeline = {"version": 1, "bpm": 120.0, "confidence": 0.9, "beats": [0.01, 0.06]}
+
+    def analyze(path):
+        calls.append(path)
+        return timeline
+
+    monkeypatch.setattr(beat_module, "analyze_beats", analyze)
+    url = f"/api/tracks/{track['id']}/beats"
+    assert not (folder / "beats.json").exists()
+    assert client.get(url).json() == timeline
+    assert (folder / "beats.json").is_file()
+    assert client.get(url).json() == timeline
+    assert calls == [folder / "original.wav"]
+    (folder / "beats.json").write_text('{"version": 999}')
+    assert client.get(url).json() == timeline
+    assert len(calls) == 2
+    assert client.get("/api/tracks/not-a-track/beats").status_code == 404

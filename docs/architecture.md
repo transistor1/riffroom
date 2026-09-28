@@ -18,6 +18,14 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
                    → final compressor → speakers
 ```
 
+## Smart metronome
+
+The beat timeline is derived from the normalized original track and cached in the track's `beats.json`, so original playback and every separation result use the same detected beats. Detection is heuristic; sparse attacks, syncopation, and tempo changes can reduce accuracy, and half- or double-tempo estimates remain possible. **Accent 1** means every fourth detected beat, starting with the first; it is not real downbeat or time-signature recognition. Refinement from a separated drum stem and live timing grading are future work.
+
+`MixerEngine` schedules oscillator envelopes on the same `AudioContext` clock as the stem sources. A 25 ms timer fills a 150 ms lookahead window; the timer does not trigger audible clicks directly. Song-time intervals are divided by playback rate, and subdivisions interpolate between adjacent detected beats. Only detected beats can receive accents. Clicks feed the final limiter with metronome and master volume applied, bypassing the stem pitch processor.
+
+Count-in schedules four separate pre-roll clicks at the local detected beat interval, adjusted for playback rate, and delays all stem starts by exactly four such intervals without moving the song offset. Song scheduling stays at or after the future source start; its scheduling marker cannot move backwards during pre-roll. Loop windows split at B and resume at A with exclusive window ends to avoid duplicate events. Pause, seek, rate changes, and loop changes cancel queued oscillators, disconnect their gains, and clear the scheduler before resynchronizing; transport changes resume without another count-in. Disabling the metronome leaves stem transport unchanged.
+
 ## Boundaries
 
 - `backend/riffroom/app.py`: HTTP routes, local-origin protection, upload handling, static frontend.

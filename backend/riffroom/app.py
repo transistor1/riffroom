@@ -16,6 +16,7 @@ from starlette.datastructures import Headers
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from riffroom.audio import decode, waveform
+from riffroom.beats import cached_beats
 from riffroom.jobs import ACTIVE, Jobs
 from riffroom.models import MLX_PROVIDER, MODELS, PORTABLE_PROVIDER, catalog, clear_model_cache
 from riffroom.providers import is_provider_available
@@ -242,6 +243,15 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
             except FileNotFoundError:
                 pass
             store.put(track)
+
+    # Serialize cache misses, including concurrent requests, without blocking the loop.
+    beat_lock = asyncio.Lock()
+
+    @app.get("/api/tracks/{track_id}/beats")
+    async def beats(track_id: str):
+        store.get(track_id)
+        async with beat_lock:
+            return await asyncio.to_thread(cached_beats, store.directory(track_id))
 
     @app.get("/api/tracks/{track_id}/original")
     def original(track_id: str):
