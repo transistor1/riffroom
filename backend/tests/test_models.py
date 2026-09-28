@@ -67,7 +67,9 @@ def test_kimberley_vocals_is_a_trusted_curated_profile(tmp_path):
     assert rows[0]["provider_options"] == [MLX_PROVIDER]
 
 
-@pytest.mark.parametrize("model_id", ["roformer-vocals", "mvsep-guitar"])
+@pytest.mark.parametrize(
+    "model_id", ["roformer-vocals", "mvsep-guitar", "mvsep-electric-guitar", "mvsep-acoustic-guitar"]
+)
 @pytest.mark.parametrize(
     ("platform_key", "mlx_available", "compatible"),
     [
@@ -105,6 +107,14 @@ def test_specialists_require_mlx_on_apple_silicon(
     [
         ("roformer-vocals", ("vocals_mel_band_roformer.ckpt", "vocals_mel_band_roformer.yaml")),
         ("mvsep-guitar", ("bs_mega_53stem_guitar_mvsep.ckpt", "bs_mega_53stem_guitar_mvsep_config.yaml")),
+        (
+            "mvsep-electric-guitar",
+            ("bs_mega_53stem_electric-guitar_mvsep.ckpt", "bs_mega_53stem_electric-guitar_mvsep_config.yaml"),
+        ),
+        (
+            "mvsep-acoustic-guitar",
+            ("bs_mega_53stem_acoustic-guitar_mvsep.ckpt", "bs_mega_53stem_acoustic-guitar_mvsep_config.yaml"),
+        ),
     ],
 )
 def test_specialists_own_checkpoint_config_and_partial_downloads(tmp_path, model_id, cache_files):
@@ -434,17 +444,25 @@ def test_unrelated_community_model_does_not_gain_portable_variant():
     assert all(variant.provider_id != PORTABLE_PROVIDER for variant in unrelated.variants)
 
 
-def test_mvsep_guitar_is_a_trusted_general_guitar_profile():
-    model = CURATED_MODELS["mvsep-guitar"]
+@pytest.mark.parametrize(
+    ("stem", "name"),
+    [
+        ("guitar", "RoFormer · MVSep Mega 53 guitar"),
+        ("electric-guitar", "RoFormer · MVSep Electric Guitar · Mega 53"),
+        ("acoustic-guitar", "RoFormer · MVSep Acoustic Guitar · Mega 53"),
+    ],
+)
+def test_mvsep_guitar_family_is_trusted(stem, name):
+    model = CURATED_MODELS[f"mvsep-{stem}"]
     assert MODELS[model.id] is model
-    assert model.name == "RoFormer · MVSep Mega 53 guitar"
+    assert model.name == name
     assert model.name != CURATED_MODELS["guitar-focus"].name
-    assert model.stems == ("guitar", "other")
+    assert model.stems == (stem, "other")
     assert model.architecture == "RoFormer"
     assert model.badge == "Guitar specialist"
     assert model.source == "https://huggingface.co/noblebarkrr/BS-Roformer-MVSep-Mega-53-stems"
     assert (model.license, model.terms_status) == ("Checkpoint terms unverified", "unverified")
     assert model.variants == (
-        ExecutionVariant(MLX_PROVIDER, "bs_mega_53stem_guitar_mvsep.ckpt", ("macos-arm64",), True),
+        ExecutionVariant(MLX_PROVIDER, f"bs_mega_53stem_{stem}_mvsep.ckpt", ("macos-arm64",), True),
     )
     assert model.filename not in VALIDATED_PORTABLE_VARIANTS

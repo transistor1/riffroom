@@ -1,6 +1,9 @@
 import logging
+from types import SimpleNamespace
 
 import pytest
+from riffroom.models import CURATED_MODELS
+from riffroom.providers.mlx import MlxAudioSeparatorProvider
 from riffroom.separator import TRUSTED_MODEL_FILENAMES, LocalSeparator
 
 
@@ -85,6 +88,20 @@ def test_download_retries_incomplete_identity_response(tmp_path, monkeypatch):
             "?download=true",
             "BS-RoFormer MVSep Mega 53 Guitar",
         ),
+        (
+            "bs_mega_53stem_electric-guitar_mvsep.ckpt",
+            "bs_mega_53stem_electric-guitar_mvsep_config.yaml",
+            "https://huggingface.co/noblebarkrr/BS-Roformer-MVSep-Mega-53-stems/resolve/main/v1",
+            "?download=true",
+            "BS-RoFormer MVSep Mega 53 Electric Guitar",
+        ),
+        (
+            "bs_mega_53stem_acoustic-guitar_mvsep.ckpt",
+            "bs_mega_53stem_acoustic-guitar_mvsep_config.yaml",
+            "https://huggingface.co/noblebarkrr/BS-Roformer-MVSep-Mega-53-stems/resolve/main/v1",
+            "?download=true",
+            "BS-RoFormer MVSep Mega 53 Acoustic Guitar",
+        ),
     ],
 )
 def test_custom_roformer_download_contract(tmp_path, monkeypatch, filename, config, base, query, friendly_name):
@@ -123,3 +140,33 @@ def test_registry_downloads_still_delegate_to_upstream(monkeypatch):
     monkeypatch.setattr("riffroom.separator.Separator.download_model_files", download)
     assert instance.download_model_files(expected[0]) == expected
     assert calls == [(instance, expected[0])]
+
+
+@pytest.mark.parametrize("stem", ["guitar", "electric-guitar", "acoustic-guitar"])
+def test_mvsep_custom_output_names_preserve_upstream_stems(tmp_path, monkeypatch, stem):
+    profile = CURATED_MODELS[f"mvsep-{stem}"]
+    output = tmp_path / "output"
+    output.mkdir()
+    captured = {}
+
+    class FakeSeparator:
+        def __init__(self, **kwargs):
+            self.model_instance = SimpleNamespace()
+
+        def load_model(self, filename):
+            captured["filename"] = filename
+
+        def separate(self, source, *, custom_output_names):
+            captured["names"] = custom_output_names
+            for name in custom_output_names.values():
+                (output / f"{name}.wav").touch()
+
+    runtime = SimpleNamespace(LocalSeparator=FakeSeparator, configure_demucs_cache=lambda cache: None)
+    monkeypatch.setattr("riffroom.providers.mlx._load_runtime", lambda: runtime)
+    paths = MlxAudioSeparatorProvider().separate(
+        profile, profile.variants[0], tmp_path / "source.wav", output, tmp_path / "cache",
+        on_model_loaded=lambda: None,
+    )
+    assert captured["filename"] == f"bs_mega_53stem_{stem}_mvsep.ckpt"
+    assert captured["names"] == {stem: stem, "other": "other"}
+    assert paths == {stem: output / f"{stem}.wav", "other": output / "other.wav"}

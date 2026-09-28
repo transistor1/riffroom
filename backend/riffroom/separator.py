@@ -28,6 +28,18 @@ CUSTOM_ROFORMER_DOWNLOADS = {
         "BS-RoFormer MVSep Mega 53 Guitar",
         "?download=true",
     ),
+    "bs_mega_53stem_electric-guitar_mvsep.ckpt": (
+        "https://huggingface.co/noblebarkrr/BS-Roformer-MVSep-Mega-53-stems/resolve/main/v1",
+        "bs_mega_53stem_electric-guitar_mvsep_config.yaml",
+        "BS-RoFormer MVSep Mega 53 Electric Guitar",
+        "?download=true",
+    ),
+    "bs_mega_53stem_acoustic-guitar_mvsep.ckpt": (
+        "https://huggingface.co/noblebarkrr/BS-Roformer-MVSep-Mega-53-stems/resolve/main/v1",
+        "bs_mega_53stem_acoustic-guitar_mvsep_config.yaml",
+        "BS-RoFormer MVSep Mega 53 Acoustic Guitar",
+        "?download=true",
+    ),
 }
 
 
