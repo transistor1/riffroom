@@ -6,6 +6,20 @@ I built Riffroom for my own guitar practice and am sharing it in case you'd like
 
 **Apple Silicon Mac is the supported song-splitting path today.** Experimental Linux and Windows source launchers are included; fresh-host validation is pending, and song splitting is not yet enabled on those platforms.
 
+## A quick look
+
+### Bring in a song and choose how to split it
+
+![Riffroom import screen with local separation model choices](docs/images/riffroom-new-session.png)
+
+Drop in an audio file, start with the recommended six-stem model, or choose a specialist for the part you want to practice. You can run another model later without importing the song again.
+
+### Turn the hard parts into a practice session
+
+![Riffroom playback timeline with saved loops, speed and pitch controls, and stem mixer](docs/images/riffroom-practice-loops.png)
+
+Save passages such as a chorus or solo, enable the ones you want, and cycle through them in timeline order. Slow the song down, change pitch, mute the guitar, or solo any combination of stems.
+
 ## What Riffroom does
 
 - **Make a backing track:** mix guitar, vocals, drums, bass, piano and other instruments with the six-stem options. Each separated part is called a *stem*.
