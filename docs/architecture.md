@@ -190,7 +190,7 @@ A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The m
 ## Practical tradeoffs
 
 - This is a single-process local application. Do not start multiple Uvicorn workers against one data folder. A future multi-user service would need database-backed jobs and authentication.
-- All selected stems are decoded into browser memory for sample-synchronized playback and gapless native looping. Very long tracks use significant RAM. Streaming or an AudioWorklet ring buffer is a future extension.
+- All selected stems are decoded into browser memory for sample-synchronized playback and audio-clock-scheduled region transitions. Very long tracks use significant RAM. Streaming or an AudioWorklet ring buffer is a future extension.
 - Speed uses Web Audio source playbackRate for sample-synchronized transport and mirrors that value to `@soundtouchjs/audio-worklet` 2.1.1, whose shared post-mix processor preserves tuning. At 0.5×, SoundTouch's auto WSOLA heuristic lengthens its processing windows for the lower internal tempo; rates of 0.75× and above retain the existing fixed profile. The Pitch slider, exact-value field, and reset control independently set the processor's ±12-semitone offset. SoundTouchJS and its installed support packages are distributed under MPL-2.0.
 - Switching results remounts the audio engine and stops playback. Completing the first separation selects its result automatically.
 - Mix preferences and the personal model working set are in localStorage, while the library is on disk. The model
@@ -202,3 +202,25 @@ A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The m
 - Manifests are simple JSON to keep the first version inspectable. SQLite can replace Store without changing the audio worker or mixer.
 - Source audio is never modified. The imported copy is resampled to 44.1 kHz stereo to standardize model and browser alignment. Every stem must have exactly the same frame count before publication.
 - Progress reports phases, not fabricated percentages. More granular model callbacks can be added when the runtime provides a stable interface.
+
+
+### Saved practice loops
+
+`PUT /api/tracks/{track_id}/practice` validates up to 50 uniquely identified named
+regions and atomically stores `{loops: [{id, name, a, b, enabled}]}` in `track.json`.
+Missing practice data means an empty list. Boundaries retain fractional seconds,
+with a minimum length of 0.05 seconds; overlapping regions are allowed.
+The Mixer debounces edits by 300ms and serializes writes across result remounts.
+Loop mode is transient and defaults off. Checkbox selection persists at song level.
+The compact selected-loop editor accepts seconds or m:ss.mmm and offers ±0.1s nudges.
+Waveform overlays remain visible with mode off; waveform zoom remains future work.
+
+The engine sorts enabled regions by start time (stable list order breaks ties).
+When starting inside overlapping regions, the first containing region wins.
+Outside a region, playback begins at the next selected start, wrapping if needed.
+A 100ms lookahead scheduler queues two seconds of AudioBufferSourceNode start/stop
+events. Every stem uses identical AudioContext boundaries, scaled by playback rate.
+The UI's 50ms polling only displays position. Pause, seek, rate and route edits
+cancel queued nodes; the shared SoundTouch processor retains the existing tempo
+and pitch processing design. Long main-thread stalls beyond the scheduling horizon
+can underrun; SoundTouch's existing processing latency still applies.

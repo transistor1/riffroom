@@ -19,9 +19,10 @@ import {
   Volume2,
   Mic2,
 } from "lucide-react";
+import { loadPractice, savePractice } from "../api";
 import { MixerEngine } from "../audio";
 import {
-  time,
+  time, preciseTime, parseTime, type PracticeLoop,
   type Channel,
   type Mix,
   type Run,
@@ -92,10 +93,65 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
   const [rate, setRate] = useState(1);
   const [pitch, setPitch] = useState(0);
   const [pitchInput, setPitchInput] = useState("0.0");
-  const [loop, setLoop] = useState({ a: 0, b: track.duration, enabled: false });
+  const [loops, setLoops] = useState<PracticeLoop[]>(track.practice?.loops ?? []);
+  const [loopMode, setLoopMode] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState("");
+  const edited = useRef(false);
+  const pending = useRef<PracticeLoop[] | null>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selected = loops.find(loop => loop.id === selectedId);
+  // Stable sort preserves original order for equal starts without changing saved data.
+  const timelineLoops = [...loops].sort((a, b) => a.a - b.a);
+  useEffect(() => {
+    let mounted = true;
+    void loadPractice(track.id).then(saved => {
+      if (mounted && !edited.current) setLoops(saved);
+    }).catch(() => { if (mounted) setSaveError("Could not load saved loops."); });
+    return () => {
+      mounted = false;
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (pending.current) void savePractice(track.id, pending.current).catch(() => {});
+    };
+  }, [track.id]);
+  useEffect(() => { engine.current?.setLoopPlan(loopMode, loops); }, [loopMode, loops]);
+  function updateLoops(next: PracticeLoop[]) {
+    edited.current = true;
+    setLoops(next);
+    pending.current = next;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      pending.current = null;
+      void savePractice(track.id, next).then(() => setSaveError(""))
+        .catch(() => setSaveError("Could not save loops. Edit again to retry."));
+    }, 300);
+  }
+  function editLoop(id: string, changes: Partial<PracticeLoop>) {
+    updateLoops(loops.map(loop => loop.id === id ? { ...loop, ...changes } : loop));
+  }
+  function boundary(field: "a" | "b", value: number) {
+    if (!selected) return;
+    const next = field === "a" ? Math.max(0, Math.min(value, selected.b - 0.05))
+      : Math.min(track.duration, Math.max(value, selected.a + 0.05));
+    editLoop(selected.id, { [field]: next });
+  }
+  function addLoop() {
+    if (track.duration < 0.05 || loops.length >= 50) return;
+    // Keep the playhead as the start when possible; leave a useful tail at the end.
+    const tail = Math.min(track.duration, Math.min(1, Math.max(0.05, track.duration / 4)));
+    const a = Math.max(0, Math.min(position, track.duration - tail));
+    let number = 1;
+    while (loops.some(loop => loop.name === `Loop ${number}`)) number++;
+    const loop = { id: crypto.randomUUID(), name: `Loop ${number}`, a,
+      b: Math.min(track.duration, a + 8), enabled: true };
+    updateLoops([...loops, loop]);
+    setSelectedId(loop.id);
+  }
   useEffect(() => {
     const player = new MixerEngine();
     engine.current = player;
+    // The syncing effect above runs before creation on mount; seed this engine too.
+    player.setLoopPlan(loopMode, loops);
     const controller = new AbortController();
     player.setMix(mix);
     player
@@ -108,7 +164,7 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
       });
     const timer = window.setInterval(() => {
       const p = player.position();
-      if (player.playing && !player.loop.enabled && p >= player.duration)
+      if (player.playing && !player.looping && p >= player.duration)
         player.pause();
       setPosition(p);
       setPlaying(player.playing);
@@ -166,10 +222,6 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
       [name]: { ...current[name], ...values },
     }));
   }
-  function updateLoop(next: typeof loop) {
-    setLoop(next);
-    engine.current?.setLoop(next);
-  }
   function seek(next: number) {
     engine.current?.seek(next);
     setPosition(next);
@@ -206,7 +258,7 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
               className="icon-button"
               title="Back to start"
               aria-label="Back to start"
-              onClick={() => engine.current?.seek(loop.enabled ? loop.a : 0)}
+              onClick={() => seek(loopMode ? timelineLoops.find(l => l.enabled)?.a ?? 0 : 0)}
             >
               <SkipBack size={19} />
             </button>
@@ -258,15 +310,13 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
             className="playhead"
             style={{ left: `${(position / track.duration) * 100}%` }}
           />
-          {loop.enabled && (
-            <div
-              className="loop-region"
-              style={{
-                left: `${(loop.a / track.duration) * 100}%`,
-                width: `${((loop.b - loop.a) / track.duration) * 100}%`,
-              }}
-            />
-          )}
+          {timelineLoops.map((loop, index) => (
+            <div key={loop.id} data-testid="loop-region" title={loop.name}
+              className={`loop-region ${loop.enabled ? "enabled" : "disabled"} ${loopMode && loop.enabled ? "active" : ""} ${selectedId === loop.id ? "chosen" : ""}`}
+              style={{ left: `${loop.a / track.duration * 100}%`, width: `${(loop.b - loop.a) / track.duration * 100}%` }}>
+              <span>{index + 1}. {loop.name}</span>
+            </div>
+          ))}
         </div>
         <div className="timeline-labels">
           <span>0:00</span>
@@ -277,49 +327,12 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
         </div>
         <div className="practice-controls">
           <div className="loop-controls">
-            <button
-              className={
-                loop.enabled ? "small-button selected" : "small-button"
-              }
-              onClick={() => updateLoop({ ...loop, enabled: !loop.enabled })}
-              aria-pressed={loop.enabled}
-            >
+            <button className={`small-button ${loopMode ? "selected" : ""}`}
+              onClick={() => setLoopMode(!loopMode)} aria-pressed={loopMode}>
               <Repeat2 size={15} /> Loop
             </button>
-            <button
-              className="marker"
-              title="Set loop start at playhead"
-              onClick={() =>
-                updateLoop({ ...loop, a: Math.min(position, loop.b - 0.25) })
-              }
-            >
-              A <span>{time(loop.a)}</span>
-            </button>
-            <button
-              className="marker"
-              title="Set loop end at playhead"
-              onClick={() =>
-                updateLoop({
-                  ...loop,
-                  b: Math.min(
-                    track.duration,
-                    Math.max(position, loop.a + 0.25),
-                  ),
-                })
-              }
-            >
-              B <span>{time(loop.b)}</span>
-            </button>
-            <button
-              className="icon-button"
-              aria-label="Reset loop"
-              title="Reset loop"
-              onClick={() =>
-                updateLoop({ a: 0, b: track.duration, enabled: false })
-              }
-            >
-              <RotateCcw size={13} />
-            </button>
+            <button className="small-button" onClick={addLoop} disabled={loops.length >= 50 || track.duration < 0.05}>Add loop</button>
+            {loopMode && !loops.some(loop => loop.enabled) && <small>Select at least one loop</small>}
           </div>
           <div className="playback-adjustments">
             <label className="speed">
@@ -383,6 +396,44 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
             </div>
           </div>
         </div>
+        <div className="saved-loops">
+          {timelineLoops.map((loop, index) => <div className="saved-loop" key={loop.id}>
+            <input type="checkbox" aria-label={`Enable ${loop.name}`} checked={loop.enabled}
+              onChange={e => editLoop(loop.id, { enabled: e.target.checked })} />
+            <button className={`small-button ${selectedId === loop.id ? "selected" : ""}`}
+              aria-pressed={selectedId === loop.id} onClick={() => setSelectedId(loop.id)}>
+              {index + 1}. {loop.name} <small>{preciseTime(loop.a)} → {preciseTime(loop.b)}</small>
+            </button>
+            <button className="text-button" aria-label={`Delete ${loop.name}`} onClick={() => {
+              if (selectedId === loop.id) setSelectedId(null);
+              updateLoops(loops.filter(l => l.id !== loop.id));
+            }}>×</button>
+          </div>)}
+        </div>
+        {selected && <div className="loop-editor">
+          <label>Name <input key={selected.id} aria-label="Loop name" maxLength={60}
+            defaultValue={selected.name} onBlur={e => {
+              const name = e.target.value.trim() || selected.name;
+              e.target.value = name; editLoop(selected.id, { name });
+            }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /></label>
+          {(["a", "b"] as const).map(field => {
+            const label = field === "a" ? "start" : "end";
+            return <div className="loop-boundary" key={field}>
+              <label>{label === "start" ? "Start" : "End"} <input
+                key={`${selected.id}:${selected[field]}`} aria-label={`Loop ${label}`} defaultValue={preciseTime(selected[field])}
+                onBlur={e => {
+                  const value = parseTime(e.target.value);
+                  if (value !== null) boundary(field, value);
+                  e.target.value = preciseTime(value === null ? selected[field] : field === "a" ? Math.max(0, Math.min(value, selected.b - 0.05)) : Math.min(track.duration, Math.max(value, selected.a + 0.05)));
+                }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /></label>
+              <button className="small-button" aria-label={`Nudge ${label} back 0.1 seconds`} onClick={() => boundary(field, selected[field] - 0.1)}>−0.1</button>
+              <button className="small-button" aria-label={`Nudge ${label} forward 0.1 seconds`} onClick={() => boundary(field, selected[field] + 0.1)}>+0.1</button>
+              <button className="small-button" title={`Set loop ${label} at playhead`} onClick={() => boundary(field, position)}>Set {label} at playhead</button>
+            </div>;
+          })}
+        </div>}
+        <p className="loop-help">Add passages, select their checkboxes, then turn on Loop to cycle in timeline order. Edit times as seconds or m:ss.mmm.</p>
+        {saveError && <small role="alert">{saveError}</small>}
       </section>
       <div className="section-heading">
         <div>

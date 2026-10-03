@@ -4,7 +4,7 @@ import type {
 } from "@soundtouchjs/audio-worklet";
 // @ts-expect-error Vite resolves the package's documented processor asset import.
 import soundTouchProcessorUrl from "@soundtouchjs/audio-worklet/processor?url";
-import type { Mix, Stem } from "./types";
+import type { Mix, Stem, PracticeLoop } from "./types";
 
 const standardStretchParameters: StretchParameters = {
   sequenceMs: 80,
@@ -45,21 +45,24 @@ export class MixerEngine {
   private soundTouch: SoundTouchNode | null = null;
   private soundTouchRegistered = false;
   private buffers = new Map<string, AudioBuffer>();
-  private sources = new Map<string, AudioBufferSourceNode>();
+  private sources = new Set<AudioBufferSourceNode>();
   private gains = new Map<string, GainNode>();
   private startedAt = 0;
   private offset = 0;
   private generation = 0;
   private playIntent = 0;
+  private wantsPlay = false;
   playing = false;
   duration = 0;
   rate = 1;
   pitchSemitones = 0;
-  loop: { a: number; b: number; enabled: boolean } = {
-    a: 0,
-    b: 0,
-    enabled: false,
-  };
+  private route: PracticeLoop[] = [];
+  private scheduler: ReturnType<typeof setInterval> | null = null;
+  private nextAt = 0;
+  private nextOffset = 0;
+  private nextIndex = 0;
+  private firstIndex = 0;
+  get looping() { return this.route.length > 0; }
   private mix: Mix = {};
   private masterVolume = 0.8;
 
@@ -152,15 +155,62 @@ export class MixerEngine {
     if (!this.playing || !this.context) return this.offset;
     const elapsed =
       Math.max(0, this.context.currentTime - this.startedAt) * this.rate;
-    let position = this.offset + elapsed;
-    if (this.loop.enabled && position >= this.loop.b) {
-      position =
-        this.loop.a + ((position - this.loop.b) % (this.loop.b - this.loop.a));
+    if (!this.looping) return Math.min(this.offset + elapsed, this.duration);
+    const first = this.route[this.firstIndex];
+    if (elapsed < first.b - this.offset) return this.offset + elapsed;
+    let remaining = (elapsed - (first.b - this.offset)) %
+      this.route.reduce((sum, loop) => sum + loop.b - loop.a, 0);
+    for (let n = 1; n <= this.route.length; n++) {
+      const loop = this.route[(this.firstIndex + n) % this.route.length];
+      if (remaining < loop.b - loop.a) return loop.a + remaining;
+      remaining -= loop.b - loop.a;
     }
-    return Math.min(position, this.duration);
+    return first.a;
   }
+
+  private schedule = () => {
+    const ctx = this.context!;
+    const now = ctx.currentTime;
+    if (this.looping && this.nextAt < now) {
+      // A delayed timer must skip missed audio, not start expired segments in a burst.
+      // Reduce whole cycles first so even a long suspension costs at most one route.
+      const cycle = this.route.reduce((sum, loop) => sum + loop.b - loop.a, 0);
+      let missed = ((now - this.nextAt) * this.rate) % cycle;
+      while (missed >= this.route[this.nextIndex].b - this.nextOffset) {
+        missed -= this.route[this.nextIndex].b - this.nextOffset;
+        this.nextIndex = (this.nextIndex + 1) % this.route.length;
+        this.nextOffset = this.route[this.nextIndex].a;
+      }
+      this.nextOffset += missed;
+      this.nextAt = now;
+    }
+    // Queue two seconds ahead; the audio clock, never this timer, triggers jumps.
+    while (this.nextAt < now + 2) {
+      const region = this.route[this.nextIndex];
+      const end = region?.b ?? this.duration;
+      const start = this.nextAt;
+      const offset = this.nextOffset;
+      const stop = start + (end - offset) / this.rate;
+      this.buffers.forEach((buffer, name) => {
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.playbackRate.value = this.rate;
+        source.connect(this.gains.get(name)!);
+        source.start(start, offset);
+        source.stop(stop);
+        this.sources.add(source);
+        source.onended = () => { source.disconnect(); this.sources.delete(source); };
+      });
+      if (!this.looping) { this.nextAt = Infinity; break; }
+      this.nextIndex = (this.nextIndex + 1) % this.route.length;
+      this.nextOffset = this.route[this.nextIndex].a;
+      this.nextAt = stop;
+    }
+  };
+
   async play() {
     if (this.playing || !this.buffers.size) return;
+    this.wantsPlay = true;
     const ctx = this.init();
     const intent = ++this.playIntent;
     await ctx.resume();
@@ -170,30 +220,35 @@ export class MixerEngine {
     if (intent !== this.playIntent || this.playing || !this.buffers.size)
       return;
     if (this.offset >= this.duration) this.offset = 0;
-    if (
-      this.loop.enabled &&
-      (this.offset < this.loop.a || this.offset >= this.loop.b)
-    )
-      this.offset = this.loop.a;
+    if (this.looping) {
+      let index = this.route.findIndex(loop => this.offset >= loop.a && this.offset < loop.b);
+      if (index < 0) {
+        index = this.route.findIndex(loop => loop.a >= this.offset);
+        if (index < 0) index = 0;
+        this.offset = this.route[index].a;
+      }
+      this.firstIndex = index;
+    }
     this.startedAt = ctx.currentTime + 0.04;
     this.playing = true;
-    this.buffers.forEach((buffer, name) => {
-      const source = ctx.createBufferSource();
+    this.buffers.forEach((_buffer, name) => {
       const gain = ctx.createGain();
-      source.buffer = buffer;
-      source.playbackRate.value = this.rate;
-      source.loop = this.loop.enabled;
-      source.loopStart = this.loop.a;
-      source.loopEnd = this.loop.b;
       gain.gain.value = channelGain(name, this.mix);
-      source.connect(gain).connect(this.master!);
-      source.start(this.startedAt, this.offset);
-      this.sources.set(name, source);
+      gain.connect(this.master!);
       this.gains.set(name, gain);
     });
+    this.nextAt = this.startedAt;
+    this.nextOffset = this.offset;
+    this.nextIndex = this.firstIndex;
+    this.schedule();
+    if (this.looping) this.scheduler = setInterval(this.schedule, 100);
   }
+
   pause() {
+    this.wantsPlay = false;
     this.playIntent++;
+    if (this.scheduler !== null) clearInterval(this.scheduler);
+    this.scheduler = null;
     this.offset = this.position();
     this.playing = false;
     this.sources.forEach((s) => {
@@ -206,13 +261,13 @@ export class MixerEngine {
     this.resetSoundTouch();
   }
   seek(position: number) {
-    const resume = this.playing;
+    const resume = this.playing || this.wantsPlay;
     this.pause();
     this.offset = Math.max(0, Math.min(position, this.duration));
     if (resume) void this.play();
   }
   setRate(rate: number) {
-    const resume = this.playing;
+    const resume = this.playing || this.wantsPlay;
     this.pause();
     this.rate = rate;
     if (resume) void this.play();
@@ -221,10 +276,12 @@ export class MixerEngine {
     this.pitchSemitones = Math.max(-12, Math.min(12, semitones));
     this.updateSoundTouchParameters();
   }
-  setLoop(loop: typeof this.loop) {
-    const resume = this.playing;
+  setLoopPlan(mode: boolean, loops: PracticeLoop[]) {
+    const resume = this.playing || this.wantsPlay;
     this.pause();
-    this.loop = { ...loop, enabled: loop.enabled && loop.b - loop.a >= 0.25 };
+    this.route = mode ? loops.filter(loop => loop.enabled && Number.isFinite(loop.a) &&
+      Number.isFinite(loop.b) && loop.a >= 0 && loop.b - loop.a >= 0.05 - 1e-9)
+      .map(loop => ({ ...loop })).sort((a, b) => a.a - b.a) : [];
     if (resume) void this.play();
   }
   dispose() {

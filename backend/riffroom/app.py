@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import math
 import os
 import shutil
 from contextlib import asynccontextmanager
@@ -11,7 +12,7 @@ from uuid import uuid4
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.datastructures import Headers
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -47,6 +48,44 @@ class BindTrustedHostMiddleware(TrustedHostMiddleware):
                 await self.app(scope, receive, send)
                 return
         await super().__call__(scope, receive, send)
+
+
+class PracticeLoop(BaseModel):
+    model_config = ConfigDict(strict=True, allow_inf_nan=False)
+    id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=60)
+    a: float = Field(ge=0)
+    b: float
+    enabled: bool
+
+    @field_validator("a", "b", mode="before")
+    @classmethod
+    def finite_boundary(cls, value):
+        # Avoid echoing non-JSON NaN/Infinity in FastAPI's validation response.
+        if isinstance(value, float) and not math.isfinite(value):
+            raise HTTPException(422, "Loop boundaries must be finite numbers")
+        return value
+
+    @field_validator("id", "name", mode="before")
+    @classmethod
+    def trim_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def valid_length(self):
+        if self.b - self.a < 0.05 - 1e-9:
+            raise ValueError("Loops must be at least 0.05 seconds long")
+        return self
+
+
+class PracticeRequest(BaseModel):
+    loops: list[PracticeLoop] = Field(max_length=50)
+
+    @model_validator(mode="after")
+    def unique_ids(self):
+        if len({loop.id for loop in self.loops}) != len(self.loops):
+            raise ValueError("Loop ids must be unique")
+        return self
 
 
 class SeparationRequest(BaseModel):
@@ -151,6 +190,13 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
     @app.get("/api/tracks/{track_id}")
     def track(track_id: str):
         return store.get(track_id)
+
+    @app.put("/api/tracks/{track_id}/practice")
+    def save_practice(track_id: str, request: PracticeRequest):
+        current = store.get(track_id)
+        if any(loop.b > current["duration"] for loop in request.loops):
+            raise HTTPException(422, "Loop end exceeds track duration")
+        return store.update(track_id, practice=request.model_dump())
 
     @app.post("/api/tracks", status_code=201)
     async def upload(file: UploadFile = File(...), model_id: str = Form("demucs-6")):

@@ -1853,3 +1853,19 @@ h1 em {
   color: var(--muted);
   font-size: 0.78rem;
 }
+
+.saved-loops { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.saved-loop { display: flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
+.saved-loop .small-button { flex-wrap: wrap; overflow-wrap: anywhere; min-width: 0; text-align: left; }
+.saved-loop small { font-size: 10px; font-variant-numeric: tabular-nums; }
+.loop-editor { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.loop-editor label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.loop-editor input { width: 110px; min-width: 0; padding: 6px; background: var(--bg); color: inherit; border: 1px solid #58624d; border-radius: 5px; }
+.loop-boundary { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.loop-help { font-size: 11px; color: #99a397; margin: 10px 0 0; }
+.loop-region { pointer-events: none; overflow: hidden; }
+.loop-region.disabled { opacity: .3; }
+.loop-region.enabled { background: #c6e89322; }
+.loop-region.active { background: #c6e89344; }
+.loop-region.chosen { outline: 2px solid #e6f6c5; outline-offset: -2px; }
+.loop-region span { font-size: 10px; white-space: nowrap; color: #e6f6c5; }

@@ -357,6 +357,7 @@ test("import, real separation, mixing, looping, model comparison and removal", a
     .getByRole("slider", { name: "Seek guitar", exact: true })
     .fill("2");
   await expect(mainSeek).toHaveValue("2");
+  await page.getByRole("button", { name: "Add loop", exact: true }).click();
   await page.getByTitle("Set loop start at playhead").click();
   await mainSeek.fill("4");
   await page.getByTitle("Set loop end at playhead").click();
@@ -453,5 +454,88 @@ test("import, real separation, mixing, looping, model comparison and removal", a
   await page.getByRole("button", { name: "Delete track", exact: true }).click();
   await page.getByRole("button", { name: "Remove track", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Your song." })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+
+test("saved precise loops are shared across results", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const loops: Array<{ id: string; name: string; a: number; b: number; enabled: boolean }> = [];
+  const track = { id: "a".repeat(32), title: "Loop fixture", filename: "fixture.wav", duration: 20,
+    created_at: new Date().toISOString(), status: "ready", message: "", active_run: "run",
+    peaks: [0.2, 0.5, 0.3], error: null, practice: { loops },
+    runs: [{ id: "run", model_id: "demucs-6", stems: [{ name: "guitar", file: "guitar.wav", url: "/fixture.wav", peaks: [0.2] }] }] };
+  // Generate silent mono PCM in memory: both results decode real, duration-matched audio.
+  const sampleRate = 8000;
+  const audio = Buffer.alloc(44 + track.duration * sampleRate * 2);
+  audio.write("RIFF", 0);
+  audio.writeUInt32LE(audio.length - 8, 4);
+  audio.write("WAVEfmt ", 8);
+  audio.writeUInt32LE(16, 16);
+  audio.writeUInt16LE(1, 20);
+  audio.writeUInt16LE(1, 22);
+  audio.writeUInt32LE(sampleRate, 24);
+  audio.writeUInt32LE(sampleRate * 2, 28);
+  audio.writeUInt16LE(2, 32);
+  audio.writeUInt16LE(16, 34);
+  audio.write("data", 36);
+  audio.writeUInt32LE(audio.length - 44, 40);
+  for (const url of ["**/fixture.wav", `**/api/tracks/${track.id}/original`]) {
+    await page.route(url, route => route.fulfill({ contentType: "audio/wav", body: audio }));
+  }
+  await page.route("**/api/tracks", route => route.fulfill({ json: [track] }));
+  await page.route(`**/api/tracks/${track.id}`, route => route.fulfill({ json: track }));
+  await page.route(`**/api/tracks/${track.id}/practice`, async route => {
+    track.practice.loops = route.request().postDataJSON().loops;
+    await route.fulfill({ json: track });
+  });
+  await page.reload();
+  await page.getByRole("button", { name: /Loop fixture/ }).click();
+  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeEnabled();
+  // Insert out of order to verify display sorting does not rewrite persisted order.
+  for (const [name, a, b] of [["Solo", "0:06.250", "8.750"], ["Intro", "1.125", "2.875"]]) {
+    await page.getByRole("button", { name: "Add loop", exact: true }).click();
+    await page.getByLabel("Loop name", { exact: true }).fill(name);
+    await page.getByLabel("Loop name", { exact: true }).press("Tab");
+    await page.getByLabel("Loop end", { exact: true }).fill(b);
+    await page.getByLabel("Loop end", { exact: true }).press("Enter");
+    await page.getByLabel("Loop start", { exact: true }).fill(a);
+    await page.getByLabel("Loop start", { exact: true }).press("Enter");
+  }
+  await page.getByRole("button", { name: "Loop", exact: true }).click();
+  await expect(page.getByTestId("loop-region")).toHaveCount(2);
+  await expect(page.getByTestId("loop-region")).toHaveText(["1. Intro", "2. Solo"]);
+  await expect(page.locator(".saved-loop > button.small-button")).toHaveText([
+    "1. Intro 0:01.125 → 0:02.875", "2. Solo 0:06.250 → 0:08.750",
+  ]);
+  await expect.poll(() => track.practice.loops.map(loop => loop.a)).toEqual([6.25, 1.125]);
+  await page.getByLabel("Separation result").selectOption("original");
+  await expect(page.getByLabel("Enable Intro")).toBeChecked();
+  await expect(page.getByRole("button", { name: "Loop", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await page.reload();
+  await page.getByRole("button", { name: /Loop fixture/ }).click();
+  await expect(page.getByTestId("loop-region")).toHaveCount(2);
+  await expect(page.getByText("0:01.125 → 0:02.875", { exact: true })).toBeVisible();
+  await page.getByLabel("Enable Intro").uncheck();
+  await expect.poll(() => track.practice.loops.find(loop => loop.name === "Intro")?.enabled).toBe(false);
+  await page.getByRole("button", { name: /^2\. Solo/ }).click();
+  await expect(page.getByLabel("Loop name", { exact: true })).toHaveValue("Solo");
+  await page.getByRole("button", { name: "Delete Solo", exact: true }).click();
+  await expect(page.getByLabel("Loop name", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("loop-region")).toHaveCount(1);
+  await expect.poll(() => track.practice.loops.length).toBe(1);
+  const seek = page.getByRole("slider", { name: "Seek", exact: true });
+  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeEnabled();
+  await seek.fill("18");
+  await page.getByRole("button", { name: "Add loop", exact: true }).click();
+  await expect(page.getByLabel("Loop start", { exact: true })).toHaveValue("0:18.000");
+  await expect(page.getByLabel("Loop end", { exact: true })).toHaveValue("0:20.000");
+  await seek.fill("19.95");
+  await page.getByRole("button", { name: "Add loop", exact: true }).click();
+  await expect(page.getByLabel("Loop start", { exact: true })).toHaveValue("0:19.000");
+  await expect(page.getByLabel("Loop end", { exact: true })).toHaveValue("0:20.000");
+  await expect.poll(() => track.practice.loops.length).toBe(3);
+  await expect(page.getByRole("alert")).toHaveCount(0);
   expect(errors).toEqual([]);
 });

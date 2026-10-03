@@ -634,3 +634,44 @@ def test_bind_host_trust_and_origin(monkeypatch, tmp_path, bind, host, accepted)
             assert client.post(endpoint, headers={"Origin": "http://evil.example"}).status_code == 403
             assert client.post(endpoint, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
             assert client.post(endpoint, headers={"Origin": f"http://{host}:8765"}).status_code == 404
+
+
+def test_practice_persists_and_existing_tracks_work(application):
+    app, client = application
+    track = upload(client)
+    url = f"/api/tracks/{track['id']}"
+    assert "practice" not in client.get(url).json()
+    loops = [{"id": "solo", "name": "  Solo  ", "a": 0.0125, "b": 0.075, "enabled": True}]
+    response = client.put(url + "/practice", json={"loops": loops})
+    assert response.status_code == 200
+    loops[0]["name"] = "Solo"
+    assert response.json()["practice"]["loops"] == loops
+    assert client.get(url).json()["practice"]["loops"] == loops
+    from riffroom.store import Store
+    assert Store(app.state.store.root).get(track["id"])["practice"]["loops"] == loops
+    assert client.put(url + "/practice", json={"loops": []}).json()["practice"] == {"loops": []}
+
+
+@pytest.mark.parametrize("change", [
+    {"id": ""}, {"id": "x" * 129}, {"name": " "}, {"name": "x" * 61},
+    {"a": -0.01}, {"a": 0.06}, {"b": 0.11}, {"b": 0.049},
+    {"a": "NaN"}, {"b": "Infinity"}, {"a": None}, {"enabled": "yes"},
+])
+def test_practice_rejects_invalid_regions(application, change):
+    _, client = application
+    track = upload(client)
+    loop = {"id": "one", "name": "One", "a": 0.0, "b": 0.05, "enabled": True} | change
+    assert client.put(f"/api/tracks/{track['id']}/practice", json={"loops": [loop]}).status_code == 422
+
+
+def test_practice_count_ids_overlap_and_minimum(application):
+    _, client = application
+    track = upload(client)
+    url = f"/api/tracks/{track['id']}/practice"
+    loops = [{"id": str(i), "name": "Solo", "a": 0.025, "b": 0.075, "enabled": True} for i in range(51)]
+    assert client.put(url, json={"loops": loops[:50]}).status_code == 200
+    assert client.put(url, json={"loops": loops}).status_code == 422
+    assert client.put(url, json={"loops": [loops[0], loops[0]]}).status_code == 422
+    for value in ["NaN", "Infinity", "-Infinity"]:
+        body = '{"loops":[{"id":"x","name":"X","a":0,"b":' + value + ',"enabled":true}]}'
+        assert client.put(url, content=body, headers={"Content-Type": "application/json"}).status_code == 422

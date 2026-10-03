@@ -10,7 +10,7 @@ I built Riffroom for my own guitar practice and am sharing it in case you'd like
 
 - **Make a backing track:** mix guitar, vocals, drums, bass, piano and other instruments with the six-stem options. Each separated part is called a *stem*.
 - **Listen closely:** solo the guitar, mute another instrument, or combine solos to hear how parts fit together.
-- **Work on a passage:** set an A–B loop, change speed while preserving tuning, and adjust pitch independently.
+- **Work on a passage:** save and cycle through multiple practice loops, change speed while preserving tuning, and adjust pitch independently.
 - **Compare splitting methods:** keep multiple results for a song and switch between them and the original.
 - **Keep your practice local:** save songs and results on your computer and download individual stems as WAV files. No account, API key, paid service or cloud upload is needed.
 
@@ -22,11 +22,11 @@ Song splitting is approximate: expect some instrument bleed and artifacts, espec
 2. Separation runs in the background; you can listen to the original while waiting. The library shows its status. One job runs at a time to limit GPU memory use.
 3. **Play guitar with the band** mutes the guitar. **Hear just the guitar** solos it.
 4. Use each stem's **M**, **S**, and volume slider. Volume runs from 0–200%; the master sets overall output. Multiple solos work together; mute takes precedence.
-5. Seek to a passage, set **A** and **B**, and enable **Loop**. Space plays/pauses, and arrow keys skip five seconds when you aren't editing a control.
+5. Seek to a passage and click **Add loop**. Name it, edit start/end as seconds or **m:ss.mmm**, or nudge either boundary by **±0.1s**. Select the loops you want and enable **Loop** to cycle through them in timeline order, skipping gaps. Space plays/pauses, and arrow keys skip five seconds when you aren't editing a control.
 6. Try another model from the bottom of the track page. Each completed run remains available in **Listening to**, alongside the original.
 7. Use a stem's download arrow to save its WAV file.
 
-Mix levels, mutes, and solos are remembered per result in this browser. Track audio and all completed separation results persist on disk. Loop points, play position, speed, and master output currently reset when changing results. Speed changes tempo while preserving tuning, and the Pitch control transposes playback independently.
+Mix levels, mutes, and solos are remembered per result in this browser. Track audio and all completed separation results persist on disk. Named loops and their selection checkboxes are saved with the song and shared across results. Loop mode defaults off each time the mixer opens. Play position, speed, and master output reset when changing results. Speed changes tempo while preserving tuning, and the Pitch control transposes playback independently.
 
 ## Get started
 

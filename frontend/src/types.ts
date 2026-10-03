@@ -5,7 +5,10 @@ export type Run = {
   provider_id?: string;
   stems: Stem[];
 };
+export type PracticeLoop = { id: string; name: string; a: number; b: number; enabled: boolean };
+export type PracticeConfig = { loops: PracticeLoop[] };
 export type Track = {
+  practice?: PracticeConfig;
   id: string;
   title: string;
   filename: string;
@@ -64,3 +67,16 @@ export const active = (track?: Track | null) =>
   !!track && ["queued", "processing"].includes(track.status);
 export const time = (seconds: number) =>
   `${Math.floor(Math.max(0, seconds) / 60)}:${String(Math.floor(Math.max(0, seconds) % 60)).padStart(2, "0")}`;
+
+export function preciseTime(seconds: number): string {
+  const ms = Math.round(Math.max(0, seconds) * 1000);
+  return `${Math.floor(ms / 60000)}:${(Math.floor(ms / 1000) % 60).toString().padStart(2, "0")}.${(ms % 1000).toString().padStart(3, "0")}`;
+}
+export function parseTime(text: string): number | null {
+  const value = text.trim();
+  if (!/^(?:\d+:)?\d+(?:\.\d+)?$/.test(value)) return null;
+  const parts = value.split(":").map(Number);
+  if (parts.length === 2 && parts[1] >= 60) return null;
+  const result = parts.length === 2 ? parts[0] * 60 + parts[1] : parts[0];
+  return Number.isFinite(result) ? result : null;
+}

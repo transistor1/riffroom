@@ -194,12 +194,14 @@ it("starts all stems on the same clock and keeps a seek in sync", async () => {
 it("loops and accounts for speed on the shared timeline", async () => {
   const player = new MixerEngine();
   await player.load(stems, new AbortController().signal);
-  player.setLoop({ a: 2, b: 4, enabled: true });
+  player.setLoopPlan(true, [{ id: "one", name: "One", a: 2, b: 4, enabled: true }]);
   player.setRate(0.5);
   await player.play();
+  clock.currentTime = 3.9;
+  (player as any).schedule();
   clock.currentTime = 5.04;
   expect(player.position()).toBeCloseTo(2.5);
-  expect(nodes[0].loop).toBe(true);
+  expect(nodes[2].start.mock.calls[0]).toEqual([4.04, 2]);
   expect(nodes[0].playbackRate.value).toBe(0.5);
   player.dispose();
 });
@@ -259,4 +261,133 @@ it("cannot restart after pause while the browser is resuming its audio context",
   expect(player.playing).toBe(false);
   expect(nodes).toHaveLength(0);
   player.dispose();
+});
+
+const regions = [
+  { id: "late", name: "Late", a: 6, b: 6.5, enabled: true },
+  { id: "off", name: "Off", a: 4, b: 5, enabled: false },
+  { id: "early", name: "Early", a: 2, b: 2.5, enabled: true },
+];
+it("schedules selected regions in order and wraps with all stems synchronized", async () => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  player.setLoopPlan(true, regions);
+  player.setRate(0.5);
+  await player.play();
+  expect(nodes[0].start.mock.calls[0]).toEqual([0.04, 2]);
+  expect(nodes[2].start.mock.calls[0]).toEqual([1.04, 6]);
+  expect(nodes[0].stop.mock.calls[0][0]).toBe(1.04);
+  expect(nodes[2].start.mock.calls).toEqual(nodes[3].start.mock.calls);
+  clock.currentTime = 1.54;
+  expect(player.position()).toBeCloseTo(6.25);
+  (player as any).schedule();
+  expect(nodes[4].start.mock.calls[0]).toEqual([2.04, 2]);
+  clock.currentTime = 2.14;
+  expect(player.position()).toBeCloseTo(2.05);
+  player.dispose();
+});
+it("normalizes outside seeks, retains inside offsets and pause/resume position", async () => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  player.setLoopPlan(true, regions);
+  player.seek(4);
+  await player.play();
+  expect(nodes[0].start.mock.calls[0][1]).toBe(6);
+  clock.currentTime = 0.24;
+  player.pause();
+  expect(player.position()).toBeCloseTo(6.2);
+  const count = nodes.length;
+  await player.play();
+  expect(nodes[count].start.mock.calls[0][1]).toBeCloseTo(6.2);
+  player.pause();
+  player.seek(9);
+  await player.play();
+  expect(player.position()).toBe(2);
+  player.pause();
+  player.seek(2.125);
+  await player.play();
+  expect(player.position()).toBe(2.125);
+  player.dispose();
+});
+it("cancels queued sources on edits and restores continuous playback when disabled", async () => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  player.setLoopPlan(true, regions);
+  await player.play();
+  const stale = [...nodes];
+  player.setLoopPlan(true, [regions[0]]);
+  await vi.waitFor(() => expect(nodes.length).toBeGreaterThan(stale.length));
+  stale.forEach(node => expect(node.stop).toHaveBeenCalledTimes(2));
+  expect(player.position()).toBe(6);
+  player.setLoopPlan(false, regions);
+  await vi.waitFor(() => expect(player.playing).toBe(true));
+  clock.currentTime = 1.04;
+  expect(player.position()).toBeCloseTo(7);
+  player.dispose();
+});
+it("plays normally when no loops are selected and supports overlapping regions", async () => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  player.setLoopPlan(true, regions.map(loop => ({ ...loop, enabled: false })));
+  await player.play();
+  clock.currentTime = 1.04;
+  expect(player.position()).toBeCloseTo(1);
+  player.pause();
+  player.setLoopPlan(true, [regions[2], { ...regions[0], a: 2.25, b: 3 }]);
+  player.seek(2.4);
+  await player.play();
+  expect(player.position()).toBe(2.4);
+  clock.currentTime = 1.28;
+  expect(player.position()).toBeCloseTo(2.35);
+  player.dispose();
+});
+
+import { parseTime, preciseTime } from "./types";
+it.each([0.5, 1, 1.25])("resynchronizes after a long scheduler delay at speed %s", async rate => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  // Overlap means the correct route segment cannot be inferred from position alone.
+  player.setLoopPlan(true, [regions[2], { ...regions[0], a: 2.25, b: 3 }]);
+  player.setRate(rate);
+  player.seek(2.4);
+  await player.play();
+  const count = nodes.length;
+  clock.currentTime = 0.04 + 1000.35 / rate;
+  const expected = player.position();
+  expect(expected).toBeCloseTo(2.5);
+  (player as any).schedule();
+  expect(nodes[count].start.mock.calls[0][0]).toBe(clock.currentTime);
+  expect(nodes[count].start.mock.calls[0][1]).toBeCloseTo(expected);
+  expect(nodes[count].stop.mock.calls[0][0]).toBeCloseTo(clock.currentTime + 0.5 / rate);
+  expect(player.position()).toBeCloseTo(expected);
+  for (let i = count; i < nodes.length; i += stems.length) {
+    expect(nodes[i].start.mock.calls[0][0]).toBeGreaterThanOrEqual(clock.currentTime);
+    expect(nodes[i].start.mock.calls).toEqual(nodes[i + 1].start.mock.calls);
+  }
+  player.dispose();
+});
+
+it("bounds source creation for 50ms loops after hours without a scheduler tick", async () => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  player.setLoopPlan(true, [{ ...regions[2], a: 0, b: 0.05 }]);
+  player.setRate(1.25);
+  await player.play();
+  expect(nodes.length).toBeLessThanOrEqual(51 * stems.length);
+  const count = nodes.length;
+  clock.currentTime = 7200.063;
+  const expected = player.position();
+  (player as any).schedule();
+  expect(nodes.length - count).toBeLessThanOrEqual(51 * stems.length);
+  expect(nodes[count].start.mock.calls[0][0]).toBe(clock.currentTime);
+  expect(nodes[count].start.mock.calls[0][1]).toBeCloseTo(expected);
+  player.dispose();
+});
+
+it("formats and parses precise boundaries without whole-second rounding", () => {
+  expect(preciseTime(62.125)).toBe("1:02.125");
+  expect(preciseTime(59.9999)).toBe("1:00.000");
+  expect(parseTime("1:02.125")).toBe(62.125);
+  expect(parseTime(" 2.125 ")).toBe(2.125);
+  for (const invalid of ["", "NaN", "Infinity", "1:60", "-1", "1:2:3"]) expect(parseTime(invalid)).toBeNull();
 });

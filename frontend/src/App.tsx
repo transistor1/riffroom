@@ -995,8 +995,9 @@ export default function App() {
                 Set volume from 0–200%. The master controls the whole mix.
               </li>
               <li>
-                Seek to a section, click <b>A</b> for its start and <b>B</b> for
-                its end, then turn on Loop.
+                Click <b>Add loop</b> at the playhead, then name the region and
+                edit its precise start and end times. Check the regions to
+                practice; <b>Loop</b> cycles them in timeline order.
               </li>
               <li>
                 <b>Space</b> plays or pauses. Arrow keys skip five seconds.
