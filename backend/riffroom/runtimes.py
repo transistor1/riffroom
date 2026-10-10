@@ -18,12 +18,13 @@ AUDIO_SEPARATOR_DISPLAY_NAME = "Portable audio-separator runtime"
 AUDIO_SEPARATOR_VERSION = "0.47.0"
 # Bump whenever Riffroom's dependency recipe or installation procedure changes,
 # even if the upstream package version stays the same. Legacy markers had no revision.
-AUDIO_SEPARATOR_MANAGED_REVISION = "2"
+AUDIO_SEPARATOR_MANAGED_REVISION = "3"
 _MANAGED_MARKER = f"{AUDIO_SEPARATOR_VERSION}\nrecipe={AUDIO_SEPARATOR_MANAGED_REVISION}"
 AUDIO_SEPARATOR_PACKAGE = f"audio-separator[cpu]=={AUDIO_SEPARATOR_VERSION}"
 # samplerate 0.1.0 bundles an x86_64-only dylib and is not imported by the
 # execution-validated paths. Install the remaining dependencies separately so
-# diffq's source build happens only after its Torch dependency is available.
+# the platform-specific diffq package is installed only after its Torch
+# dependency is available.
 AUDIO_SEPARATOR_DEPENDENCIES = (
     # Imported directly by spec_utils; librosa >=1 no longer brings it transitively.
     "audioread>=3",
@@ -50,6 +51,7 @@ AUDIO_SEPARATOR_DEPENDENCIES = (
     "onnxruntime>=1.17",
 )
 AUDIO_SEPARATOR_DIFFQ_DEPENDENCY = "diffq>=0.2"
+AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY = "diffq-fixed>=0.2"
 # Exercise lazy execution imports without constructing a separator or downloading models.
 _AUDIO_SEPARATOR_IMPORT_CHECK = (
     "import audioread; "
@@ -62,6 +64,14 @@ _VERSION_FILE = "VERSION"
 _MAX_ERROR_LENGTH = 300
 _PACKAGE_NAME = re.compile(r"Failed building wheel for ([A-Za-z0-9_.-]+)", re.IGNORECASE)
 _MACOS_COMMAND_LINE_TOOLS = Path("/Library/Developer/CommandLineTools")
+
+
+def audio_separator_diffq_dependency(platform: str | None = None) -> str:
+    """Return audio-separator's platform-specific Demucs dependency."""
+    current_platform = sys.platform if platform is None else platform
+    if current_platform == "win32":
+        return AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY
+    return AUDIO_SEPARATOR_DIFFQ_DEPENDENCY
 
 
 class CompletedProcessLike(Protocol):
@@ -304,8 +314,13 @@ class AudioSeparatorRuntime:
                 ],
                 "installing the runtime dependencies",
             )
+            diffq_dependency = audio_separator_diffq_dependency()
             diffq_environment = None
-            if sys.platform == "darwin" and _MACOS_COMMAND_LINE_TOOLS.is_dir():
+            if (
+                diffq_dependency == AUDIO_SEPARATOR_DIFFQ_DEPENDENCY
+                and sys.platform == "darwin"
+                and _MACOS_COMMAND_LINE_TOOLS.is_dir()
+            ):
                 diffq_environment = {**os.environ, "DEVELOPER_DIR": str(_MACOS_COMMAND_LINE_TOOLS)}
             await self._checked_run(
                 [
@@ -313,7 +328,7 @@ class AudioSeparatorRuntime:
                     "-m",
                     "pip",
                     "install",
-                    AUDIO_SEPARATOR_DIFFQ_DEPENDENCY,
+                    diffq_dependency,
                 ],
                 "installing the Demucs dependency",
                 env=diffq_environment,
@@ -381,10 +396,12 @@ __all__ = [
     "AUDIO_SEPARATOR_ENV",
     "AUDIO_SEPARATOR_DEPENDENCIES",
     "AUDIO_SEPARATOR_DIFFQ_DEPENDENCY",
+    "AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY",
     "AUDIO_SEPARATOR_PACKAGE",
     "AUDIO_SEPARATOR_MANAGED_REVISION",
     "AUDIO_SEPARATOR_VERSION",
     "AudioSeparatorRuntime",
+    "audio_separator_diffq_dependency",
     "venv_audio_separator_path",
     "venv_executable_path",
     "venv_python_path",

@@ -155,6 +155,8 @@ User-reported Windows x86-64 result: direct
 `.\.env\Scripts\python.exe .\scripts\launch.py --lan` startup served HTTPS over the LAN and an
 audio upload succeeded. This is partial fresh-host validation only; PowerShell forwarding, portable-runtime
 installation and functional separation remain unvalidated on Windows.
+The managed Windows runtime recipe now follows audio-separator 0.47.0's metadata by installing
+`diffq-fixed>=0.2` after Torch, but actual Windows installation and inference remain unvalidated.
 
 Worker validation:
 

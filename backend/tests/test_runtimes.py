@@ -8,10 +8,13 @@ from riffroom.runtimes import (
     _MANAGED_MARKER,
     AUDIO_SEPARATOR_DEPENDENCIES,
     AUDIO_SEPARATOR_DIFFQ_DEPENDENCY,
+    AUDIO_SEPARATOR_MANAGED_REVISION,
     AUDIO_SEPARATOR_PACKAGE,
     AUDIO_SEPARATOR_VERSION,
+    AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY,
     AudioSeparatorRuntime,
     _retarget_console_script,
+    audio_separator_diffq_dependency,
     venv_audio_separator_path,
     venv_python_path,
 )
@@ -71,7 +74,10 @@ def test_override_precedes_path_and_managed_runtime(tmp_path):
     assert managed.status()["managed_installed"] is True
 
 
-@pytest.mark.parametrize("marker", [AUDIO_SEPARATOR_VERSION, "0.47.0\nrecipe=1", _MANAGED_MARKER])
+@pytest.mark.parametrize(
+    "marker",
+    [AUDIO_SEPARATOR_VERSION, "0.47.0\nrecipe=1", "0.47.0\nrecipe=2", _MANAGED_MARKER],
+)
 def test_managed_detection_requires_current_recipe_without_running_commands(tmp_path, marker):
     def unexpected_run(*args, **kwargs):
         pytest.fail("Discovery must not run subprocesses")
@@ -177,11 +183,23 @@ def test_managed_install_is_atomic_and_uses_the_pinned_package(tmp_path, monkeyp
     assert "architectures.demucs_separator import DemucsSeparator" in calls[5][0][2]
     assert "demucs.htdemucs import HTDemucs" in calls[5][0][2]
     assert calls[6][0] == [str(venv_audio_separator_path(runtime.venv)), "--help"]
-    assert (runtime.runtime / "VERSION").read_text() == "0.47.0\nrecipe=2\n"
+    assert (runtime.runtime / "VERSION").read_text() == "0.47.0\nrecipe=3\n"
     assert all(kwargs["check"] is False and kwargs["shell"] is False for _, kwargs in calls)
     assert all("env" not in kwargs for _, kwargs in calls[:3])
     assert calls[3][1]["env"]["DEVELOPER_DIR"] == str(command_line_tools)
     assert not any(path.name.endswith((".tmp", ".backup")) for path in runtime.root.iterdir())
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ("win32", AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY),
+        ("darwin", AUDIO_SEPARATOR_DIFFQ_DEPENDENCY),
+        ("linux", AUDIO_SEPARATOR_DIFFQ_DEPENDENCY),
+    ],
+)
+def test_diffq_dependency_matches_platform(platform, expected):
+    assert audio_separator_diffq_dependency(platform) == expected
 
 
 def test_runtime_installs_real_diffq_after_torch_and_omits_samplerate():
@@ -191,8 +209,31 @@ def test_runtime_installs_real_diffq_after_torch_and_omits_samplerate():
     assert 'audioop-lts>=0.2.1; python_version >= "3.13"' in AUDIO_SEPARATOR_DEPENDENCIES
     assert "torch" in dependencies
     assert AUDIO_SEPARATOR_DIFFQ_DEPENDENCY == "diffq>=0.2"
+    assert AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY == "diffq-fixed>=0.2"
     assert "diffq" not in dependencies
     assert "samplerate" not in dependencies
+    assert AUDIO_SEPARATOR_MANAGED_REVISION == "3"
+
+
+def test_windows_install_uses_fixed_diffq_after_torch_without_macos_environment(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("riffroom.runtimes.sys.platform", "win32")
+    runtime = AudioSeparatorRuntime(
+        tmp_path,
+        environ={},
+        executable_resolver=lambda name: None,
+        runner=successful_runner(calls),
+    )
+
+    asyncio.run(runtime._install())
+
+    assert calls[1][0][-2:] == ["--no-deps", AUDIO_SEPARATOR_PACKAGE]
+    assert calls[2][0][-len(AUDIO_SEPARATOR_DEPENDENCIES) :] == list(AUDIO_SEPARATOR_DEPENDENCIES)
+    assert any(dependency.startswith("torch") for dependency in calls[2][0])
+    assert calls[3][0][-1] == AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY
+    assert "env" not in calls[3][1]
+    assert calls[4][0][1:] == ["--help"]
+    assert calls[5][0] == [calls[2][0][0], "-c", _AUDIO_SEPARATOR_IMPORT_CHECK]
 
 
 def test_missing_distribution_error_is_platform_neutral():
