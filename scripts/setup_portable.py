@@ -67,8 +67,11 @@ def main():
     parser.add_argument("--fingerprint", action="store_true")
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--lan", action="store_true")
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
+    if args.lan and args.host != "127.0.0.1":
+        parser.error("--lan cannot be combined with a non-default --host; use --lan by itself")
     if args.fingerprint:
         print(fingerprint())
         return 0
@@ -78,7 +81,11 @@ def main():
     ready = (stamp.is_file() and stamp.read_text().strip() == current
              and (ROOT / "frontend/dist/index.html").is_file())
     print(f"Riffroom core setup · {platform.system()} {platform.machine()}", flush=True)
-    print("Linux/Windows launch and separation still require fresh host validation.", flush=True)
+    print(
+        "Linux launch and Linux/Windows separation still require fresh-host validation; "
+        "Windows launch validation is partial.",
+        flush=True,
+    )
     for error in errors:
         print(f"- {error}", flush=True)
     if args.check:
@@ -99,7 +106,8 @@ def main():
         run([npm, "run", "build", "--prefix", "frontend"])
         stamp.write_text(current + "\n")
     if args.launch:
-        command = [str(python), str(ROOT / "scripts/launch.py"), "--host", args.host]
+        command = [str(python), str(ROOT / "scripts/launch.py")]
+        command.extend(["--lan"] if args.lan else ["--host", args.host])
         if args.no_browser:
             command.append("--no-browser")
         os.chdir(ROOT)

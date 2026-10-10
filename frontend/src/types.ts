@@ -47,6 +47,7 @@ export type Model = {
     platform_key: string;
     platform_name: string;
     platform_supported: boolean;
+    experimental: boolean;
     runtime_available: boolean;
     compatible: boolean;
     label: string;

@@ -174,10 +174,33 @@ def test_demucs_6_prefers_mlx_then_resolves_portable_without_fallback_guessing()
     assert model.cache_files
 
 
+def test_macos_stable_available_label_is_unchanged(tmp_path):
+    row = next(
+        item
+        for item in catalog(
+            tmp_path,
+            provider_availability={MLX_PROVIDER: True, PORTABLE_PROVIDER: True},
+            platform_key="macos-arm64",
+        )
+        if item["id"] == "demucs-6"
+    )
+
+    assert row["provider"] == MLX_PROVIDER
+    assert row["compatibility"]["experimental"] is False
+    assert row["compatibility"]["label"] == "Compatible · macOS (Apple Silicon)"
+
+
 def test_validated_portable_allowlist_is_explicit_and_portable_only():
     assert tuple(VALIDATED_PORTABLE_VARIANTS) == (DEMUCS_6_FILENAME, *PORTABLE_FILENAMES)
     assert all(
-        variant == ExecutionVariant(PORTABLE_PROVIDER, filename, ("macos-arm64",), True)
+        variant
+        == ExecutionVariant(
+            PORTABLE_PROVIDER,
+            filename,
+            ("macos-arm64",),
+            True,
+            ("windows-x86_64",),
+        )
         for filename, variant in VALIDATED_PORTABLE_VARIANTS.items()
     )
 
@@ -372,6 +395,50 @@ def test_resolution_skips_an_available_but_unvalidated_variant():
         variant_for_provider(model, MLX_PROVIDER)
 
 
+def test_unvalidated_experimental_variant_is_not_host_capable():
+    model = replace(
+        portable_model(),
+        variants=(
+            ExecutionVariant(
+                PORTABLE_PROVIDER,
+                PORTABLE_PILOT_FILENAME,
+                (),
+                False,
+                ("windows-x86_64",),
+            ),
+        ),
+    )
+
+    assert (
+        resolve_model_variant(
+            model,
+            availability(**{PORTABLE_PROVIDER: True}),
+            platform_key="windows-x86_64",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("model_id", [model_id for model_id in CURATED_MODELS if model_id != "demucs-6"])
+def test_mlx_only_models_remain_unavailable_on_windows_x86(tmp_path, model_id):
+    model = CURATED_MODELS[model_id]
+    runtimes = {MLX_PROVIDER: True, PORTABLE_PROVIDER: True}
+    row = next(
+        item
+        for item in catalog(
+            tmp_path,
+            provider_availability=runtimes,
+            platform_key="windows-x86_64",
+        )
+        if item["id"] == model_id
+    )
+
+    assert resolve_model_variant(model, availability(**runtimes), platform_key="windows-x86_64") is None
+    assert row["compatibility"]["platform_supported"] is False
+    assert row["compatibility"]["experimental"] is False
+    assert row["compatibility"]["compatible"] is False
+
+
 @pytest.mark.parametrize("filename", NEW_PORTABLE_FILENAMES)
 def test_new_portable_models_are_single_rows_and_runtime_required_without_provider(tmp_path, filename):
     model = portable_model(filename)
@@ -397,10 +464,89 @@ def test_new_portable_models_are_single_rows_and_runtime_required_without_provid
         "platform_key": "macos-arm64",
         "platform_name": "macOS (Apple Silicon)",
         "platform_supported": True,
+        "experimental": False,
         "runtime_available": False,
         "compatible": False,
         "label": "Runtime required · macOS (Apple Silicon)",
     }
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    ("demucs-6", *(community_model_id(filename) for filename in PORTABLE_FILENAMES)),
+)
+def test_windows_x86_portable_models_are_experimental_and_installable(tmp_path, model_id):
+    model = MODELS[model_id]
+    row = next(
+        item
+        for item in catalog(
+            tmp_path,
+            provider_availability={MLX_PROVIDER: False, PORTABLE_PROVIDER: False},
+            platform_key="windows-x86_64",
+        )
+        if item["id"] == model_id
+    )
+
+    assert resolve_model_variant(model, availability(), platform_key="windows-x86_64") is None
+    assert row["supported_platforms"] == ["macos-arm64"]
+    assert row["provider"] is None
+    assert row["provider_options"] == [PORTABLE_PROVIDER]
+    assert row["compatibility"] == {
+        "platform_key": "windows-x86_64",
+        "platform_name": "Windows (x86-64)",
+        "platform_supported": True,
+        "experimental": True,
+        "runtime_available": False,
+        "compatible": False,
+        "label": "Experimental runtime required · Windows (x86-64)",
+    }
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    ("demucs-6", *(community_model_id(filename) for filename in PORTABLE_FILENAMES)),
+)
+def test_windows_x86_portable_models_resolve_when_runtime_is_available(tmp_path, model_id):
+    model = MODELS[model_id]
+    runtimes = {MLX_PROVIDER: False, PORTABLE_PROVIDER: True}
+    selected = resolve_model_variant(
+        model,
+        availability(**runtimes),
+        platform_key="windows-x86_64",
+    )
+    row = next(
+        item
+        for item in catalog(tmp_path, provider_availability=runtimes, platform_key="windows-x86_64")
+        if item["id"] == model_id
+    )
+
+    assert selected is not None
+    assert selected.provider_id == PORTABLE_PROVIDER
+    assert row["provider"] == PORTABLE_PROVIDER
+    assert row["compatibility"]["compatible"] is True
+    assert row["compatibility"]["experimental"] is True
+    assert row["compatibility"]["label"] == "Experimental · Windows (x86-64)"
+
+
+@pytest.mark.parametrize("platform_key", ["windows-arm64", "linux-x86_64", "linux-arm64"])
+@pytest.mark.parametrize(
+    "model_id",
+    ("demucs-6", *(community_model_id(filename) for filename in PORTABLE_FILENAMES)),
+)
+def test_portable_models_remain_unavailable_on_other_hosts(tmp_path, platform_key, model_id):
+    model = MODELS[model_id]
+    runtimes = {MLX_PROVIDER: True, PORTABLE_PROVIDER: True}
+    row = next(
+        item
+        for item in catalog(tmp_path, provider_availability=runtimes, platform_key=platform_key)
+        if item["id"] == model_id
+    )
+
+    assert resolve_model_variant(model, availability(**runtimes), platform_key=platform_key) is None
+    assert row["compatibility"]["platform_supported"] is False
+    assert row["compatibility"]["experimental"] is False
+    assert row["compatibility"]["compatible"] is False
+    assert row["compatibility"]["label"].startswith("Unavailable ·")
 
 
 @pytest.mark.parametrize("filename", PORTABLE_FILENAMES)

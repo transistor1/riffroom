@@ -34,7 +34,8 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
   explicit non-empty stem list, and derives opaque SHA-256-based IDs. Static portable rows win when the sources
   are merged, so those filenames remain one logical row even without MLX. A profile stores user-facing metadata once
   and has an ordered tuple of server-owned execution variants. Each variant names only a trusted provider,
-  checkpoint filename, explicit validation state and platform capabilities. The API computes compatibility
+  checkpoint filename, explicit validation state, stable supported platforms and separate experimental platform
+  capabilities. The API computes compatibility
   across validated variants and reports the first available variant as the selected provider without duplicating
   the logical catalog row.
 - `providers/`: the trusted separation-provider boundary. `base.py` defines separation and runtime-availability,
@@ -84,11 +85,13 @@ portable-only community profiles are validated only through `audio-separator`; p
 in MLX's bundled registry is not treated as runtime proof. The allowlist grows only after the fixed managed runtime
 successfully separates generated audio and produces every trusted expected stem as a readable WAV. The portable
 provider is available only when its administrator override, `PATH` command, or managed CLI resolves successfully.
-Until then each portable-only row remains visible in Model Manager as **Runtime required**, stays out of normal
+Until then each portable-only row remains visible in Model Manager as **Runtime required** (or
+**Experimental runtime required** on Windows x86-64), stays out of normal
 selectors, and offers the portable installer. The user must explicitly
 start the large install; opening Model Manager never installs software. Windows and Linux venv layouts are handled
-by the installer. Source launchers now cover Windows/Linux, but portable profile capabilities and
-end-to-end separation validation remain `macos-arm64` only.
+by the installer. The explicit Demucs six-stem portable variant and three static portable community profiles are
+execution-validated on `macos-arm64` and explicitly experimental on `windows-x86_64`. No arbitrary community
+model inherits that Windows capability, and Windows ARM64 and Linux remain unavailable.
 
 The Phase 3D2 follow-up resolved the Demucs import blocker without a shim. `audio-separator` imports
 `DiffQuantizer`, `UniformQuantizer`, and `restore_quantized_state` at module load; the validated `htdemucs_6s`
@@ -99,7 +102,8 @@ exactly guitar, vocals, drums, bass, piano and other as readable stereo WAVs. Th
 model therefore keeps MLX first and adds `audio-separator` second, with the same model ID and trusted stems.
 `htdemucs_ft.yaml` remains MLX-only: its missing checkpoint again could not be downloaded because the worker
 could not resolve `dl.fbaipublicfiles.com`, so it did not reach inference. All portable validation remains
-declared only for `macos-arm64`; Windows and Linux remain unclaimed until separately tested.
+declared only for `macos-arm64`; Windows x86-64 is experimental until separately tested, and other Windows/Linux
+hosts remain unavailable.
 
 The install endpoint accepts no package, version, executable, or provider input. It always creates a temporary
 venv with the running Riffroom Python, installs exactly `audio-separator[cpu]==0.47.0`, and installs the pinned
@@ -172,7 +176,9 @@ an existing Riffroom on port 8765 and reports other port conflicts; Windows uses
 The heavyweight managed audio-separator runtime remains an explicit in-app installation.
 
 Every launcher defaults to `127.0.0.1`. `--host` (PowerShell `-BindAddress`) opts into another
-socket bind address; portable setup forwards it unchanged. The launcher resets the process-local
+plain-HTTP socket bind address; portable setup forwards it unchanged. PowerShell `-Lan` forwards the launcher's
+existing `--lan` mode, which binds all IPv4 interfaces with a self-signed HTTPS certificate. It is mutually
+exclusive with a non-default bind address and preserves `-NoBrowser`. The launcher resets the process-local
 `RIFFROOM_BIND_HOST` setting before configuring the app: default trust remains localhost,
 127.0.0.1 and testserver; a specific bind adds that host, while 0.0.0.0/:: permits any Host.
 Bracketed IPv6 literals receive exact address matching before Starlette's hostname check.
@@ -181,9 +187,10 @@ access warning. Wildcard binds use a loopback browser/readiness URL; remote clie
 computer's LAN IP and port 8765. Only default launches reuse an existing server; explicit binds
 probe the requested socket and report conflicts rather than silently reusing a loopback server.
 
-Declared model capabilities remain `macos-arm64`. Windows/Linux can launch the core app, but enabling
-song splitting requires fresh host validation and a separately reviewed catalog capability update; launcher
-support does not certify inference support. Intel macOS remains outside this MVP.
+Stable model capabilities remain `macos-arm64`. The four explicit portable variants additionally declare
+`windows-x86_64` as experimental, allowing Model Manager installation and use when that runtime becomes
+available without presenting Windows as execution-validated. Windows ARM64, Linux and Intel macOS remain outside
+this capability. Launcher support does not certify inference support.
 
 A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The mixer accepts arbitrary names; add display labels/icons and choose how the guitar presets target the new names.
 

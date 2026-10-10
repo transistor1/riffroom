@@ -4,7 +4,7 @@
 
 I built Riffroom for my own guitar practice and am sharing it in case you'd like to play with it too. Open a song, split it into instruments, then turn the guitar down or off and play along—or solo it to hear the part you're learning. Loop a tricky passage, slow it down without detuning, or transpose it to match your guitar. It all runs locally, with a mixer in your browser.
 
-**Apple Silicon Mac is the supported song-splitting path today.** Experimental Linux and Windows source launchers are included; fresh-host validation is pending, and song splitting is not yet enabled on those platforms.
+**Apple Silicon Mac is the supported song-splitting path today.** Linux remains a core-app experiment. Windows x86-64 can also offer a narrowly allowlisted portable separator as an explicit experiment, but Windows separation has not yet been validated.
 
 ## A quick look
 
@@ -80,7 +80,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1
 
 `Riffroom.ps1` delegates to `start.ps1`, which uses the same portable/core setup as Linux. The execution-policy override applies only to this invocation; it does not change machine-wide policy. No administrator shell is required. Add `-NoBrowser` to start without opening a browser.
 
-**Linux and Windows need fresh-host validation of both launch and song splitting.** The current model catalog still limits validated splitting capabilities to macOS ARM64, so a successful core launch does not enable splitting on these platforms. The portable splitting engine is a separate, explicit installation in Model Manager; the source launchers do not install it. See [validation notes](docs/validation.md#cross-platform-source-launcher-mvp) for the remaining checks.
+The HTTPS LAN launcher and upload flow have been user-confirmed on Windows x86-64, which is partial fresh-host validation. Windows separation remains explicitly experimental and still needs its first functional inference test. Model Manager can install the portable engine for Demucs six stems and three allowlisted community pilots; the source launcher does not install it. Linux splitting remains unavailable. See [validation notes](docs/validation.md#cross-platform-source-launcher-mvp) for the remaining checks.
 
 ### Setup checks and limits
 
@@ -111,21 +111,24 @@ The default is `127.0.0.1` (this computer only). Network binding is opt-in:
 ```
 
 ```powershell
-# Windows (start.ps1 accepts the same options)
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1 -BindAddress 0.0.0.0
+# Windows (start.ps1 accepts the same flags)
+.\Riffroom.ps1 -Lan
 # Optional: add -NoBrowser
 ```
 
-Stop an existing server before changing its bind address. On another computer, open
-`http://<server-LAN-IP>:8765`; the local browser uses `http://127.0.0.1:8765`.
-You can replace `0.0.0.0` with a specific address assigned to the server.
+Stop an existing server before changing its bind mode. On another computer, open the
+`https://<server-LAN-IP>:8765` URL printed by the launcher and accept its self-signed
+certificate warning. `-Lan` delegates to the launcher's HTTPS certificate handling;
+it cannot be combined with a non-default `-BindAddress`. Using
+`-BindAddress 0.0.0.0` directly remains available for plain HTTP testing, but remote
+AudioWorklet playback requires a secure context and is therefore unsuitable in that mode.
 Riffroom has no authentication: anyone who can reach the bound interface can access
-the app and data. Use only on a trusted LAN. Windows/Linux fresh-host launch and
-song-splitting validation are still pending.
+the app and data. Use only on a trusted LAN. A user successfully started HTTPS LAN
+mode and uploaded audio on Windows x86-64; Windows separation is still unvalidated.
 
 ## Choosing a splitting method
 
-These curated choices are available through the Apple Silicon setup. Use Model Manager to explore other entries and manage the models in your selection menus; availability depends on your platform and installed tools.
+These curated choices are available through the Apple Silicon setup. On Windows x86-64, Demucs six stems is an explicit portable-runtime experiment; its first functional inference test is still pending. Use Model Manager to explore other entries and manage the models in your selection menus; availability depends on your platform and installed tools.
 
 | Model | Outputs | When to use it |
 |---|---|---|
@@ -193,4 +196,4 @@ The browser test imports an original synthetic fixture, runs the real default ML
 - **Port 8765 in use:** the launcher reuses Riffroom if it owns the port; otherwise it asks you to stop the other app.
 - **SDK build error:** make sure `xcrun --sdk macosx --show-sdk-path` resolves to an SDK compatible with the selected Xcode toolchain. Setup already includes the workaround used on this Mac.
 - **Shared Homebrew on a multi-user Mac:** setup can use compatible tools that are already installed, including an unlinked supported Python. If another account owns Homebrew and a tool is missing, use that account or ask an administrator to install the tool.
-- **No splitting options on Linux/Windows:** these launchers currently prepare only the core app; model capabilities remain limited to validated macOS ARM64 execution. Fresh-host splitting validation is still pending.
+- **No splitting options on Linux:** Linux model execution remains unavailable. On Windows x86-64, Model Manager can install the experimental portable runtime for only the explicitly allowlisted models; Windows inference has not yet been validated.

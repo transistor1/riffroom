@@ -1,7 +1,11 @@
 # Windows PowerShell 5.1 and PowerShell 7. No machine-wide policy changes.
-param([switch]$Check, [switch]$NoBrowser, [string]$BindAddress = "127.0.0.1")
+param([switch]$Check, [switch]$NoBrowser, [switch]$Lan, [string]$BindAddress = "127.0.0.1")
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
+if ($Lan -and $BindAddress -ne "127.0.0.1") {
+    Write-Error '-Lan cannot be combined with a non-default -BindAddress. Use -Lan by itself for HTTPS LAN mode.' -ErrorAction Continue
+    exit 2
+}
 $python = $null
 $pythonArgs = @()
 $probe = 'import sys; sys.exit(not ((3,11) <= sys.version_info[:2] < (3,14)))'
@@ -39,6 +43,6 @@ if (-not $python) {
 $setupArgs = @((Join-Path $PSScriptRoot 'scripts/setup_portable.py'))
 if ($Check) { $setupArgs += '--check' } else { $setupArgs += '--launch' }
 if ($NoBrowser) { $setupArgs += '--no-browser' }
-$setupArgs += @('--host', $BindAddress)
+if ($Lan) { $setupArgs += '--lan' } else { $setupArgs += @('--host', $BindAddress) }
 & $python @pythonArgs @setupArgs
 exit $LASTEXITCODE

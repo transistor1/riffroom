@@ -105,15 +105,18 @@ No outer launcher installs the managed separation runtime. Node/FFmpeg must rema
 `--check`/`-Check` return nonzero for missing/incompatible prerequisites and report a missing or
 stale build/stamp as "setup required" without making changes.
 
-Windows/Linux remain **not live validated**. Before public release, use fresh native hosts to test:
+Linux remains **not live validated**. Windows x86-64 has partial user-reported fresh-host validation: the user
+started `scripts/launch.py --lan` directly, reached the HTTPS LAN site, and successfully uploaded audio. This
+does not validate the PowerShell forwarding added afterward or any separation runtime/inference. Before public
+release, use fresh native hosts to test:
 Python 3.11/3.12/3.13 installation and package wheel availability; paths with spaces;
 missing-tool diagnostics and read-only check mode; clean setup and repeat launch;
 browser opening, existing-server reuse, occupied port errors and Ctrl-C shutdown;
-upload/FFmpeg processing; managed runtime installation and real separation.
-The current catalog still limits validated model capabilities to macOS ARM64, so successful
-core startup does not yet enable splitting on Windows/Linux. Update capabilities only after
-native separation validation. PowerShell parsing/check execution on macOS and mocked platform
-tests are not Windows execution evidence.
+upload/FFmpeg processing beyond the user-reported Windows upload; managed runtime installation and real
+separation. Stable model capabilities remain limited to macOS ARM64. Windows x86-64 exposes only the four
+explicit portable variants as experimental so the first functional inference test can be performed; Windows
+ARM64 and Linux remain unavailable. PowerShell parsing/check execution on macOS and mocked platform tests are
+not Windows execution evidence.
 
 MVP validation on the development Mac (2026-09-25):
 
@@ -141,11 +144,17 @@ expected after the uncommitted installer changes, displayed MLX as preferred, an
 completed a real Demucs song split successfully. This is user-reported smoke-test
 evidence, separate from the worker's automated checks below.
 
-LAN startup examples: `./start.sh --host 0.0.0.0` on macOS/Linux;
-`powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1 -BindAddress 0.0.0.0`
-on Windows (`start.ps1` supports the same options). Add `--no-browser` / `-NoBrowser`
-as needed. Default startup remains 127.0.0.1. Remote clients use the server's LAN IP
-and port 8765; there is no authentication, so use only a trusted LAN.
+LAN startup examples: `./start.sh --host 0.0.0.0` on macOS/Linux and
+`.\Riffroom.ps1 -Lan` on Windows (`start.ps1` supports the same flags). Add
+`--no-browser` / `-NoBrowser` as needed. Windows `-Lan` forwards the existing HTTPS LAN mode;
+`-BindAddress 0.0.0.0` is plain HTTP and unsuitable for remote AudioWorklet playback because it
+does not provide a secure context. Default startup remains 127.0.0.1. Remote clients use the
+server's LAN IP and port 8765; there is no authentication, so use only a trusted LAN.
+
+User-reported Windows x86-64 result: direct
+`.\.env\Scripts\python.exe .\scripts\launch.py --lan` startup served HTTPS over the LAN and an
+audio upload succeeded. This is partial fresh-host validation only; PowerShell forwarding, portable-runtime
+installation and functional separation remain unvalidated on Windows.
 
 Worker validation:
 
@@ -166,6 +175,5 @@ Worker validation:
 
 The initial IPv6 tests encountered the installed Starlette TestClient's IPv6 URL parser
 limitation; explicit Host headers exercise the middleware successfully. No live LAN or
-fresh Windows/Linux host test was performed. Fresh-host launch and song-splitting validation
-remain pending; model platform capability declarations are unchanged. Installer and network
-changes remain uncommitted.
+fresh Windows/Linux host test was performed by that worker. The later user-reported Windows HTTPS LAN/upload
+result above supersedes only that LAN statement; Windows song-splitting validation remains pending.

@@ -23,6 +23,7 @@ class ExecutionVariant:
     filename: str
     supported_platforms: tuple[str, ...]
     validated: bool
+    experimental_platforms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,16 @@ def _mlx_variant(filename: str) -> ExecutionVariant:
     return ExecutionVariant(MLX_PROVIDER, filename, ("macos-arm64",), True)
 
 
+def _portable_variant(filename: str) -> ExecutionVariant:
+    return ExecutionVariant(
+        PORTABLE_PROVIDER,
+        filename,
+        ("macos-arm64",),
+        True,
+        ("windows-x86_64",),
+    )
+
+
 CURATED_MODELS = {
     model.id: model
     for model in (
@@ -103,7 +114,7 @@ CURATED_MODELS = {
             "open",
             (
                 _mlx_variant(DEMUCS_6_FILENAME),
-                ExecutionVariant(PORTABLE_PROVIDER, DEMUCS_6_FILENAME, ("macos-arm64",), True),
+                _portable_variant(DEMUCS_6_FILENAME),
             ),
             (
                 DEMUCS_6_FILENAME,
@@ -224,11 +235,12 @@ PORTABLE_DRUMSEP_FILENAME = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 PORTABLE_KARAOKE_FILENAME = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
 PORTABLE_RUNTIME_SOURCE = "https://github.com/nomadkaraoke/python-audio-separator"
 PORTABLE_VALIDATION_ORIGIN = (
-    "audio-separator 0.47.0 execution-validated on macos-arm64; "
+    "audio-separator 0.47.0 execution-validated on macos-arm64 (Apple Silicon); "
+    "experimental on Windows x86-64; "
     "Riffroom-trusted metadata copied from mlx-audio-separator 0.1.7"
 )
 VALIDATED_PORTABLE_VARIANTS = {
-    filename: ExecutionVariant(PORTABLE_PROVIDER, filename, ("macos-arm64",), True)
+    filename: _portable_variant(filename)
     for filename in (
         DEMUCS_6_FILENAME,
         PORTABLE_PILOT_FILENAME,
@@ -269,7 +281,8 @@ def _portable_community_profile(
         name=name,
         stems=stems,
         description=(
-            "Validated through the portable audio-separator 0.47.0 runtime on Apple Silicon. "
+            "Execution-validated through the portable audio-separator 0.47.0 runtime on Apple "
+            "Silicon; Windows x86-64 support is experimental. "
             "Review its results and checkpoint terms before relying on it."
         ),
         badge="Community",
@@ -393,7 +406,8 @@ def community_profiles_from_metadata(
                 name=candidate["name"],
                 stems=candidate["stems"],
                 description=(
-                    "Validated through the portable audio-separator 0.47.0 runtime on Apple Silicon. "
+                    "Execution-validated through the portable audio-separator 0.47.0 runtime on "
+                    "Apple Silicon; Windows x86-64 support is experimental. "
                     "Review its results and checkpoint terms before relying on it."
                     if portable_variant
                     else "A trusted community checkpoint exposed by the pinned local runtime. "
@@ -551,14 +565,14 @@ def resolve_model_variant(
     *,
     platform_key: str | None = None,
 ) -> ExecutionVariant | None:
-    """Choose the first validated, host-capable variant whose runtime is available."""
+    """Choose the first trusted stable or experimental host variant with an available runtime."""
     host = current_platform_key() if platform_key is None else platform_key
     return next(
         (
             variant
             for variant in model.variants
             if variant.validated
-            and host in variant.supported_platforms
+            and host in (*variant.supported_platforms, *variant.experimental_platforms)
             and provider_available(variant.provider_id)
         ),
         None,
@@ -597,7 +611,8 @@ def catalog(
         host_variants = tuple(
             variant
             for variant in model.variants
-            if variant.validated and platform_key in variant.supported_platforms
+            if variant.validated
+            and platform_key in (*variant.supported_platforms, *variant.experimental_platforms)
         )
         selected = resolve_model_variant(
             model,
@@ -605,9 +620,18 @@ def catalog(
             platform_key=platform_key,
         )
         platform_supported = bool(host_variants)
+        experimental = (
+            platform_supported
+            and not any(platform_key in variant.supported_platforms for variant in host_variants)
+            and any(platform_key in variant.experimental_platforms for variant in host_variants)
+        )
         runtime_available = selected is not None
         compatible = platform_supported and runtime_available
-        if platform_supported and not runtime_available:
+        if experimental and not runtime_available:
+            label = f"Experimental runtime required · {platform_name}"
+        elif experimental:
+            label = f"Experimental · {platform_name}"
+        elif platform_supported and not runtime_available:
             label = f"Runtime required · {platform_name}"
         else:
             label = f"{'Compatible' if compatible else 'Unavailable'} · {platform_name}"
@@ -615,13 +639,14 @@ def catalog(
         item["filename"] = display_variant.filename
         item["provider"] = selected.provider_id if selected else None
         item["provider_options"] = list(
-            dict.fromkeys(variant.provider_id for variant in model.variants if variant.validated)
+            dict.fromkeys(variant.provider_id for variant in host_variants)
         )
         item["supported_platforms"] = list(supported_platforms(model))
         item["compatibility"] = {
             "platform_key": platform_key,
             "platform_name": platform_name,
             "platform_supported": platform_supported,
+            "experimental": experimental,
             "runtime_available": runtime_available,
             "compatible": compatible,
             "label": label,

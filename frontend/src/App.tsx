@@ -827,7 +827,9 @@ export default function App() {
                       <span className="model-badge">{m.badge}</span>
                     </div>
                     <span
-                      className={`compatibility ${m.compatibility.compatible ? "compatible" : "unavailable"}`}
+                      className={`compatibility ${
+                        m.compatibility.compatible ? "compatible" : "unavailable"
+                      }${m.compatibility.experimental ? " experimental" : ""}`}
                     >
                       {m.compatibility.label}
                     </span>

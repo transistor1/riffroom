@@ -195,6 +195,17 @@ def test_runtime_installs_real_diffq_after_torch_and_omits_samplerate():
     assert "samplerate" not in dependencies
 
 
+def test_missing_distribution_error_is_platform_neutral():
+    result = SimpleNamespace(
+        stdout=b"",
+        stderr=b"ERROR: No matching distribution found for a-package",
+    )
+
+    assert AudioSeparatorRuntime._failure_detail(result) == (
+        "A compatible package build is unavailable for this Python and platform."
+    )
+
+
 def test_failed_build_reports_bounded_cause_without_build_paths(tmp_path):
     calls = 0
 

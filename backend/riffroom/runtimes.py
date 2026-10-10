@@ -233,7 +233,7 @@ class AudioSeparatorRuntime:
         ):
             return "The package server could not be reached."
         if "no matching distribution found" in lowered:
-            return "A compatible package build is unavailable for this Python and Mac."
+            return "A compatible package build is unavailable for this Python and platform."
         wheel = _PACKAGE_NAME.search(output)
         if wheel:
             return f"A required package wheel could not be built ({wheel.group(1)})."
