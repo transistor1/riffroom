@@ -1,10 +1,11 @@
 import asyncio
 import json
+import signal
 import sys
 from pathlib import Path
 from uuid import uuid4
 
-from riffroom.jobs import Jobs
+from riffroom.jobs import Jobs, _process_group_kwargs
 from riffroom.models import PORTABLE_DRUMSEP_FILENAME, community_model_id
 from riffroom.store import Store
 
@@ -12,6 +13,95 @@ from riffroom.store import Store
 class AvailableProvider:
     def is_available(self):
         return True
+
+
+class FakeProcess:
+    def __init__(self, timeout=False):
+        self.pid = 123
+        self.returncode = None
+        self.timeout = timeout
+        self.signals = []
+        self.terminated = 0
+        self.killed = 0
+        self.waits = 0
+
+    def send_signal(self, event):
+        self.signals.append(event)
+
+    def terminate(self):
+        self.terminated += 1
+
+    def kill(self):
+        self.killed += 1
+
+    async def wait(self):
+        self.waits += 1
+        if self.timeout and self.waits == 1:
+            raise asyncio.TimeoutError
+        self.returncode = -1
+        return self.returncode
+
+
+def test_process_group_spawn_kwargs_are_platform_aware(monkeypatch):
+    monkeypatch.setattr("riffroom.jobs.subprocess.CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+
+    assert _process_group_kwargs("posix") == {"start_new_session": True}
+    assert _process_group_kwargs("nt") == {"creationflags": 0x200}
+
+
+def test_windows_graceful_stop_uses_ctrl_break(tmp_path, monkeypatch):
+    async def run():
+        ctrl_break = 1
+        process = FakeProcess()
+        jobs = Jobs(Store(tmp_path), tmp_path / "models")
+        jobs.processes["track"] = process
+        monkeypatch.setattr("riffroom.jobs.signal.CTRL_BREAK_EVENT", ctrl_break, raising=False)
+        monkeypatch.setattr("riffroom.jobs.os.killpg", lambda *_: None)
+
+        await jobs._kill("track", platform="nt")
+
+        assert process.signals == [ctrl_break]
+        assert process.terminated == 0
+        assert process.killed == 0
+        assert process.waits == 1
+
+    asyncio.run(run())
+
+
+def test_windows_timeout_falls_back_to_kill_without_killpg(tmp_path, monkeypatch):
+    async def run():
+        process = FakeProcess(timeout=True)
+        jobs = Jobs(Store(tmp_path), tmp_path / "models")
+        jobs.processes["track"] = process
+
+        def unexpected_killpg(*_):
+            raise AssertionError("Windows cleanup must not call os.killpg")
+
+        monkeypatch.setattr("riffroom.jobs.os.killpg", unexpected_killpg)
+        await jobs._kill("track", platform="nt", ctrl_break_event=None)
+
+        assert process.terminated == 1
+        assert process.killed == 1
+        assert process.waits == 2
+
+    asyncio.run(run())
+
+
+def test_posix_stop_uses_process_group_signals(tmp_path, monkeypatch):
+    async def run():
+        process = FakeProcess(timeout=True)
+        jobs = Jobs(Store(tmp_path), tmp_path / "models")
+        jobs.processes["track"] = process
+        signals = []
+        monkeypatch.setattr("riffroom.jobs.os.killpg", lambda pid, event: signals.append((pid, event)))
+
+        await jobs._kill("track", platform="posix")
+
+        assert signals == [(process.pid, signal.SIGTERM), (process.pid, signal.SIGKILL)]
+        assert process.killed == 0
+        assert process.waits == 2
+
+    asyncio.run(run())
 
 
 def test_worker_environment_injects_resolved_runtime_without_overriding_admin(tmp_path, monkeypatch):
@@ -62,7 +152,11 @@ def test_cancel_running_process_retains_previous_results(tmp_path, monkeypatch):
         tid = uuid4().hex
         old = [{"id": "old", "stems": []}]
         store.put({"id": tid, "status": "ready", "runs": old, "created_at": "now"})
-        jobs = Jobs(store, tmp_path / "models")
+        jobs = Jobs(
+            store,
+            tmp_path / "models",
+            provider_registry={"mlx-audio-separator": AvailableProvider()},
+        )
         jobs.start(tid, "demucs-6")
         for _ in range(100):
             if spawned:
@@ -74,6 +168,34 @@ def test_cancel_running_process_retains_previous_results(tmp_path, monkeypatch):
         assert store.get(tid)["runs"] == old
         assert store.get(tid)["status"] == "ready"
         assert not jobs.tasks
+
+    asyncio.run(run())
+
+
+def test_cleanup_failure_does_not_replace_separator_error(tmp_path, monkeypatch):
+    async def failed_worker(*args, **kwargs):
+        raise RuntimeError("original separator error")
+
+    async def failed_cleanup(track_id):
+        raise RuntimeError("secondary cleanup error")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", failed_worker)
+
+    async def run():
+        store = Store(tmp_path / "tracks")
+        tid = uuid4().hex
+        store.put({"id": tid, "status": "idle", "runs": [], "created_at": "now"})
+        jobs = Jobs(store, tmp_path / "models")
+        monkeypatch.setattr(jobs, "_provider_available", lambda provider_id: True)
+        monkeypatch.setattr(jobs, "_kill", failed_cleanup)
+
+        jobs.start(tid, "demucs-6")
+        task = jobs.tasks[tid]
+        await task
+
+        track = store.get(tid)
+        assert track["status"] == "error"
+        assert track["error"] == "original separator error"
 
     asyncio.run(run())
 

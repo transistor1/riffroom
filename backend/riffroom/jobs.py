@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -14,6 +15,57 @@ from riffroom.runtimes import AUDIO_SEPARATOR_ENV, AudioSeparatorRuntime
 from riffroom.store import Store
 
 ACTIVE = {"queued", "processing"}
+_PROCESS_CONTROL_ERRORS = (ProcessLookupError, OSError, AttributeError, ValueError, NotImplementedError)
+_DEFAULT = object()
+
+
+def _process_group_kwargs(platform: str | None = None, creation_flag: int | None = None) -> dict:
+    platform = os.name if platform is None else platform
+    if platform != "nt":
+        return {"start_new_session": True}
+    flag = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if creation_flag is None else creation_flag
+    return {"creationflags": flag} if flag else {}
+
+
+async def _terminate_process(process, platform: str | None = None, ctrl_break_event=_DEFAULT):
+    platform = os.name if platform is None else platform
+    if platform == "nt":
+        if ctrl_break_event is _DEFAULT:
+            ctrl_break_event = getattr(signal, "CTRL_BREAK_EVENT", None)
+        signalled = False
+        if ctrl_break_event is not None:
+            try:
+                process.send_signal(ctrl_break_event)
+                signalled = True
+            except _PROCESS_CONTROL_ERRORS:
+                pass
+        if not signalled:
+            try:
+                process.terminate()
+            except _PROCESS_CONTROL_ERRORS:
+                pass
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except _PROCESS_CONTROL_ERRORS:
+            pass
+
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        try:
+            if platform == "nt":
+                process.kill()
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+        except _PROCESS_CONTROL_ERRORS:
+            pass
+        try:
+            await process.wait()
+        except _PROCESS_CONTROL_ERRORS:
+            pass
+    except _PROCESS_CONTROL_ERRORS:
+        pass
 
 
 class Jobs:
@@ -79,9 +131,9 @@ class Jobs:
                             provider_id,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.STDOUT,
-                            start_new_session=True,
                             env=self._worker_environment(),
                             limit=1024 * 1024,
+                            **_process_group_kwargs(),
                         )
                     )
                     try:
@@ -123,7 +175,7 @@ class Jobs:
                     error=None,
                 )
         except asyncio.CancelledError:
-            await self._kill(track_id)
+            await self._kill_safely(track_id)
             self.store.update(
                 track_id,
                 status="ready" if self.store.get(track_id).get("runs") else "idle",
@@ -133,7 +185,7 @@ class Jobs:
             shutil.rmtree(output, ignore_errors=True)
             raise
         except Exception as exc:
-            await self._kill(track_id)
+            await self._kill_safely(track_id)
             self.store.update(
                 track_id,
                 status="error",
@@ -146,18 +198,16 @@ class Jobs:
             self.processes.pop(track_id, None)
             self.tasks.pop(track_id, None)
 
-    async def _kill(self, track_id):
+    async def _kill_safely(self, track_id):
+        try:
+            await self._kill(track_id)
+        except Exception:
+            pass
+
+    async def _kill(self, track_id, *, platform=None, ctrl_break_event=_DEFAULT):
         process = self.processes.get(track_id)
-        if process and process.returncode is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                os.killpg(process.pid, signal.SIGKILL)
-                await process.wait()
+        if process and getattr(process, "returncode", None) is None:
+            await _terminate_process(process, platform, ctrl_break_event)
 
     async def cancel(self, track_id):
         task = self.tasks.get(track_id)
