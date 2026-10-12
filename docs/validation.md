@@ -96,27 +96,33 @@ Start from a writable checkout (paths containing spaces are supported):
   Add `-Check` for diagnostics or `-NoBrowser` for headless startup.
   Install Python 3.11–3.13 (Python launcher or PATH option), Node.js 22+ with npm, and
   FFmpeg with both ffmpeg.exe/ffprobe.exe on PATH; reopen the terminal afterward.
+  Existing Conda users may optionally obtain Node.js/npm and FFmpeg/ffprobe from Conda. Conda is not
+  required, and Riffroom does not create or manage a Conda environment.
   `start.ps1` is also a direct entry point. No administrator shell is required.
 
 The launchers create/reuse `.env` automatically. Do not copy `.env` between OSes or machines;
 if diagnostics report an incompatible environment, move it aside and rerun. Setup downloads
 pinned core packages and frontend dependencies; network access is required on first run.
-No outer launcher installs the managed separation runtime. Node/FFmpeg must remain on PATH.
+No outer launcher installs the managed separation runtime. Node/FFmpeg must remain on PATH. When those
+tools come from an activated Conda environment, that environment may need to remain activated while Riffroom
+runs. Conda then supplies host executables, while Riffroom's Python packages and application interpreter remain
+in the project-local `.env`; Riffroom does not merge or manage the environments.
 `--check`/`-Check` return nonzero for missing/incompatible prerequisites and report a missing or
 stale build/stamp as "setup required" without making changes.
 
-Linux remains **not live validated**. Windows x86-64 has partial user-reported fresh-host validation: the user
-started `scripts/launch.py --lan` directly, reached the HTTPS LAN site, and successfully uploaded audio. This
-does not validate the PowerShell forwarding added afterward or any separation runtime/inference. Before public
-release, use fresh native hosts to test:
+Linux remains **not live validated**. Windows x86-64 has user-reported real-host validation: the user
+reached the HTTPS LAN site, successfully uploaded audio, and later completed a real portable CPU separation.
+The successful separation session used Node.js and FFmpeg from an activated Conda environment while the
+application's Python packages remained in Riffroom's project-local `.env`. This validates a functional Windows
+x86-64 CPU separation path, not every allowlisted model or host configuration. Continue native-host testing for:
 Python 3.11/3.12/3.13 installation and package wheel availability; paths with spaces;
 missing-tool diagnostics and read-only check mode; clean setup and repeat launch;
 browser opening, existing-server reuse, occupied port errors and Ctrl-C shutdown;
-upload/FFmpeg processing beyond the user-reported Windows upload; managed runtime installation and real
-separation. Stable model capabilities remain limited to macOS ARM64. Windows x86-64 exposes only the four
-explicit portable variants as experimental so the first functional inference test can be performed; Windows
-ARM64 and Linux remain unavailable. PowerShell parsing/check execution on macOS and mocked platform tests are
-not Windows execution evidence.
+PowerShell wrapper forwarding; clean managed-runtime installation; and the remaining allowlisted model variants.
+The supported production capabilities remain on macOS ARM64. Windows x86-64 exposes only four explicit portable
+variants as experimental, with the portable CPU path now functionally validated by a real successful separation.
+Windows ARM64 and Linux remain unavailable. PowerShell parsing/check execution on macOS and mocked platform tests
+are not substitutes for Windows execution evidence.
 
 MVP validation on the development Mac (2026-09-25):
 
@@ -153,10 +159,13 @@ server's LAN IP and port 8765; there is no authentication, so use only a trusted
 
 User-reported Windows x86-64 result: direct
 `.\.env\Scripts\python.exe .\scripts\launch.py --lan` startup served HTTPS over the LAN and an
-audio upload succeeded. This is partial fresh-host validation only; PowerShell forwarding, portable-runtime
-installation and functional separation remain unvalidated on Windows.
+audio upload succeeded. A later real Windows test also completed a portable CPU separation successfully.
+During that successful separation, an activated Conda environment kept Node.js and FFmpeg on PATH while
+Riffroom continued to use its own project-local `.env` for application Python packages. This validates the
+functional inference path, but not every allowlisted model, clean-host combination, or PowerShell wrapper path.
 The managed Windows runtime recipe now follows audio-separator 0.47.0's metadata by installing
-`diffq-fixed>=0.2` after Torch, but actual Windows installation and inference remain unvalidated.
+`diffq-fixed>=0.2` after Torch; the successful Windows CPU separation confirms that the runtime can perform
+real inference on Windows x86-64 under the tested arrangement.
 
 Worker validation:
 
@@ -177,5 +186,5 @@ Worker validation:
 
 The initial IPv6 tests encountered the installed Starlette TestClient's IPv6 URL parser
 limitation; explicit Host headers exercise the middleware successfully. No live LAN or
-fresh Windows/Linux host test was performed by that worker. The later user-reported Windows HTTPS LAN/upload
-result above supersedes only that LAN statement; Windows song-splitting validation remains pending.
+fresh Windows/Linux host test was performed by that worker. The later user-reported Windows HTTPS LAN/upload and
+successful CPU separation results above supersede those earlier Windows limitations; Linux live validation remains pending.

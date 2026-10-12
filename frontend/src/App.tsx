@@ -401,7 +401,7 @@ export default function App() {
             <CircleHelp size={16} /> A little help
           </button>
           <div className="local-status">
-            <span /> Local on your Mac <span className="version">v0.1</span>
+            <span /> Local on your Mac <span className="version">v1.2.0</span>
           </div>
         </div>
       </aside>

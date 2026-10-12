@@ -10,7 +10,7 @@ FastAPI on 127.0.0.1:8765
                 └── cancellable Python subprocess
                         ├── logical model → ordered trusted execution variants
                         │       ├── production MLX inference for validated profiles
-                        │       └── managed audio-separator 0.47.0 venv → explicit 3-model allowlist
+                        │       └── managed audio-separator 0.47.0 venv → explicit 4-profile allowlist
                         └── aligned float WAV stems + waveform peaks
 
 Browser Web Audio: shared AudioContext → one source/gain per stem
@@ -90,8 +90,10 @@ Until then each portable-only row remains visible in Model Manager as **Runtime 
 selectors, and offers the portable installer. The user must explicitly
 start the large install; opening Model Manager never installs software. Windows and Linux venv layouts are handled
 by the installer. The explicit Demucs six-stem portable variant and three static portable community profiles are
-execution-validated on `macos-arm64` and explicitly experimental on `windows-x86_64`. No arbitrary community
-model inherits that Windows capability, and Windows ARM64 and Linux remain unavailable.
+execution-validated on `macos-arm64` and explicitly experimental on `windows-x86_64`. A real Windows x86-64 CPU
+separation has now completed successfully, validating the portable execution path under that tested arrangement;
+this does not claim that every allowlisted profile or host configuration has been exercised. No arbitrary
+community model inherits that Windows capability, and Windows ARM64 and Linux remain unavailable.
 
 The Phase 3D2 follow-up resolved the Demucs import blocker without a shim. `audio-separator` imports
 `DiffQuantizer`, `UniformQuantizer`, and `restore_quantized_state` at module load; the validated `htdemucs_6s`
@@ -101,9 +103,9 @@ With `samplerate` still absent, `htdemucs_6s.yaml` then separated a generated si
 exactly guitar, vocals, drums, bass, piano and other as readable stereo WAVs. The existing `demucs-6` logical
 model therefore keeps MLX first and adds `audio-separator` second, with the same model ID and trusted stems.
 `htdemucs_ft.yaml` remains MLX-only: its missing checkpoint again could not be downloaded because the worker
-could not resolve `dl.fbaipublicfiles.com`, so it did not reach inference. All portable validation remains
-declared only for `macos-arm64`; Windows x86-64 is experimental until separately tested, and other Windows/Linux
-hosts remain unavailable.
+could not resolve `dl.fbaipublicfiles.com`, so it did not reach inference. Stable portable profile capabilities
+remain declared for `macos-arm64`; `windows-x86_64` remains experimental despite its now-successful real CPU
+separation test, and other Windows/Linux hosts remain unavailable.
 
 The install endpoint accepts no package, version, executable, or provider input. It always creates a temporary
 venv with the running Riffroom Python, installs exactly `audio-separator[cpu]==0.47.0`, and installs the pinned
@@ -162,6 +164,10 @@ Linux (`bash start.sh`) and Windows (`Riffroom.ps1`, wrapping `start.ps1`) use
 `scripts/setup_portable.py`, a core-only installer with a project-local `.env`. Windows uses
 `.env/Scripts/python.exe`; Linux/macOS use `.env/bin/python`. Portable setup requires Python 3.11–3.13,
 Node.js 22+ with npm, and FFmpeg/ffprobe on PATH, and never invokes a system package manager.
+On Windows, users who already have Conda may optionally use it to supply Node.js/npm and FFmpeg/ffprobe. Riffroom
+does not create or manage a Conda environment. If those tools come from an activated Conda environment, it may
+need to remain activated so they stay on PATH while Riffroom uses its separate project-local `.env` for its
+Python interpreter and packages.
 `requirements-core-lock.txt` pins the base dependency closure and editable-build setuptools; installation
 uses `--no-deps --no-build-isolation` for the project. Maintain the core pins alongside the full lock;
 the launcher tests check the closure against installed package metadata across Python/platform markers.
@@ -187,10 +193,12 @@ access warning. Wildcard binds use a loopback browser/readiness URL; remote clie
 computer's LAN IP and port 8765. Only default launches reuse an existing server; explicit binds
 probe the requested socket and report conflicts rather than silently reusing a loopback server.
 
-Stable model capabilities remain `macos-arm64`. The four explicit portable variants additionally declare
-`windows-x86_64` as experimental, allowing Model Manager installation and use when that runtime becomes
-available without presenting Windows as execution-validated. Windows ARM64, Linux and Intel macOS remain outside
-this capability. Launcher support does not certify inference support.
+Supported production model capabilities remain `macos-arm64`. The four explicit portable variants additionally
+declare `windows-x86_64` as experimental, allowing Model Manager installation and use when that runtime becomes
+available. A real Windows x86-64 CPU separation has completed successfully, so the portable path is functionally
+execution-validated under the tested arrangement; the experimental label reflects the still-narrow platform and
+profile coverage. Windows ARM64, Linux and Intel macOS remain outside this capability. Launcher support alone does
+not certify inference support.
 
 A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The mixer accepts arbitrary names; add display labels/icons and choose how the guitar presets target the new names.
 
