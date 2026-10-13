@@ -6,6 +6,7 @@ import shutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -17,7 +18,7 @@ from starlette.datastructures import Headers
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from riffroom.audio import decode, waveform
-from riffroom.jobs import ACTIVE, Jobs
+from riffroom.jobs import ACTIVE, InvalidSeparationSource, Jobs
 from riffroom.models import MLX_PROVIDER, MODELS, PORTABLE_PROVIDER, catalog, clear_model_cache
 from riffroom.providers import is_provider_available
 from riffroom.runtimes import AudioSeparatorRuntime
@@ -88,8 +89,28 @@ class PracticeRequest(BaseModel):
         return self
 
 
+class SeparationSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["original", "stem"] = "original"
+    run_id: str | None = None
+    stem_name: str | None = None
+
+    @model_validator(mode="after")
+    def valid_reference(self):
+        if self.type == "stem" and (not self.run_id or not self.stem_name):
+            raise ValueError("Stem sources require a run_id and stem_name")
+        if self.type == "original" and (self.run_id is not None or self.stem_name is not None):
+            raise ValueError("Original sources cannot include stem lineage")
+        return self
+
+
 class SeparationRequest(BaseModel):
     model_id: str
+    source: SeparationSource = Field(default_factory=SeparationSource)
+
+
+class ExpansionRequest(BaseModel):
+    run_id: str | None = None
 
 
 def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
@@ -105,6 +126,7 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
                     track["id"],
                     status="error",
                     pending_model=None,
+                    pending_source=None,
                     error="The app stopped during separation. You can retry.",
                     message="Interrupted",
                 )
@@ -250,10 +272,40 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
         if body.model_id not in MODELS:
             raise HTTPException(400, "Unknown separation model.")
         try:
-            jobs.start(track_id, body.model_id)
+            source = body.source.model_dump()
+            if source["type"] == "original":
+                jobs.start(track_id, body.model_id)
+            else:
+                jobs.start(track_id, body.model_id, source)
+        except InvalidSeparationSource as exc:
+            raise HTTPException(400, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         return store.get(track_id)
+
+    @app.put("/api/tracks/{track_id}/runs/{parent_id}/expansions/{stem_name}")
+    def select_expansion(track_id: str, parent_id: str, stem_name: str, body: ExpansionRequest):
+        with store.lock:
+            track = store.get(track_id)
+            if track["status"] in ACTIVE:
+                raise HTTPException(409, "Wait for separation to finish before changing a split.")
+            parent = next((run for run in track.get("runs", []) if run["id"] == parent_id), None)
+            if parent is None:
+                raise HTTPException(404, "Parent separation result not found.")
+            if stem_name not in {stem.get("name") for stem in parent.get("stems", [])}:
+                raise HTTPException(404, "Parent stem not found.")
+            if body.run_id is not None:
+                child = next((run for run in track["runs"] if run["id"] == body.run_id), None)
+                expected = {"type": "stem", "run_id": parent_id, "stem_name": stem_name}
+                if child is None or child.get("source") != expected:
+                    raise HTTPException(400, "That child result does not belong to this stem.")
+            active_children = dict(parent.get("active_children", {}))
+            if body.run_id is None:
+                active_children.pop(stem_name, None)
+            else:
+                active_children[stem_name] = body.run_id
+            parent["active_children"] = active_children
+            return store.put(track)
 
     @app.post("/api/tracks/{track_id}/cancel")
     async def cancel(track_id: str):
@@ -277,22 +329,47 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
             if run is None:
                 raise HTTPException(404, "Separation result not found.")
 
-            remaining = [item for item in track["runs"] if item["id"] != run_id]
-            if track.get("active_run") == run_id:
-                track["active_run"] = remaining[-1]["id"] if remaining else None
+            removed_ids = {run_id}
+            while True:
+                descendants = {
+                    item["id"]
+                    for item in track["runs"]
+                    if isinstance(item.get("source"), dict)
+                    and item["source"].get("run_id") in removed_ids
+                }
+                if descendants <= removed_ids:
+                    break
+                removed_ids.update(descendants)
+            remaining = [item for item in track["runs"] if item["id"] not in removed_ids]
+            for item in remaining:
+                item["active_children"] = {
+                    stem: child_id
+                    for stem, child_id in item.get("active_children", {}).items()
+                    if child_id not in removed_ids
+                }
+            if track.get("active_run") in removed_ids:
+                roots = [item for item in remaining if Store.is_root_run(item)]
+                track["active_run"] = roots[-1]["id"] if roots else None
             track["runs"] = remaining
 
-            # Use the manifest's matched ID, never the untrusted path parameter.
-            run_folder = store.directory(track_id) / "runs" / run["id"]
             # Make the manifest authoritative before touching audio files. On
             # Windows a browser response can briefly keep a stem open even
             # after the mixer switches, so physical cleanup must not turn a
             # completed logical deletion into a 500 response.
             store.put(track)
-            try:
-                shutil.rmtree(run_folder)
-            except OSError:
-                pass
+            for removed_id in removed_ids:
+                # IDs come from the matched manifest, never an untrusted path parameter.
+                if (
+                    not isinstance(removed_id, str)
+                    or Path(removed_id).name != removed_id
+                    or removed_id in {".", ".."}
+                ):
+                    continue
+                run_folder = store.directory(track_id) / "runs" / removed_id
+                try:
+                    shutil.rmtree(run_folder)
+                except OSError:
+                    pass
 
     @app.get("/api/tracks/{track_id}/original")
     def original(track_id: str):

@@ -31,7 +31,12 @@ def application(tmp_path, monkeypatch):
     app = create_app(tmp_path, tmp_path / "no-frontend")
     app.state.audio_separator_runtime._executable_resolver = lambda name: None
     started = []
-    monkeypatch.setattr(app.state.jobs, "start", lambda tid, model: started.append((tid, model)))
+
+    def start(tid, model, source=None):
+        app.state.jobs._source_path(tid, source or {"type": "original"})
+        started.append((tid, model, source))
+
+    monkeypatch.setattr(app.state.jobs, "start", start)
     app.state.started = started
     with TestClient(app) as client:
         yield app, client
@@ -322,7 +327,7 @@ def test_only_trusted_community_ids_can_start_separation(application):
 
     response = client.post(f"/api/tracks/{track['id']}/separate", json={"model_id": community.id})
     assert response.status_code == 202
-    assert app.state.started[-1] == (track["id"], community.id)
+    assert app.state.started[-1] == (track["id"], community.id, None)
 
     response = client.post(f"/api/tracks/{track['id']}/separate", json={"model_id": community.filename})
     assert response.status_code == 400
@@ -490,7 +495,7 @@ def test_import_decode_and_persist(application):
     track = upload(client)
     assert track["title"] == "guitar"
     assert track["duration"] == pytest.approx(0.1)
-    assert app.state.started == [(track["id"], "demucs-6")]
+    assert app.state.started == [(track["id"], "demucs-6", None)]
     assert client.get("/api/tracks").json()[0] == track
     path = app.state.store.directory(track["id"]) / "original.wav"
     info = sf.info(path)
@@ -531,12 +536,107 @@ def test_model_switch_delete_and_cross_origin(application):
     track = upload(client)
     tid = track["id"]
     assert client.post(f"/api/tracks/{tid}/separate", json={"model_id": "roformer-6"}).status_code == 202
-    assert app.state.started[-1] == (tid, "roformer-6")
+    assert app.state.started[-1] == (tid, "roformer-6", None)
     response = client.delete(f"/api/tracks/{tid}", headers={"Origin": "https://untrusted.example"})
     assert response.status_code == 403
     assert client.delete(f"/api/tracks/{tid}").status_code == 204
     assert not app.state.store.directory(tid).exists()
     assert client.get(f"/api/tracks/{tid}").status_code == 404
+
+
+def test_separate_accepts_explicit_original_source(application):
+    app, client = application
+    track = upload(client)
+
+    response = client.post(
+        f"/api/tracks/{track['id']}/separate",
+        json={"model_id": "roformer-6", "source": {"type": "original"}},
+    )
+
+    assert response.status_code == 202
+    assert app.state.started[-1] == (track["id"], "roformer-6", None)
+
+
+def test_separate_accepts_persisted_stem_source_and_rejects_stale_or_cross_track(application):
+    app, client = application
+    first = upload(client)
+    second = upload(client)
+    parent_id = uuid4().hex
+    add_runs(app, first["id"], [parent_id], active_run=parent_id)
+    source = {"type": "stem", "run_id": parent_id, "stem_name": "guitar"}
+
+    response = client.post(
+        f"/api/tracks/{first['id']}/separate",
+        json={"model_id": "roformer-6", "source": source},
+    )
+
+    assert response.status_code == 202
+    assert app.state.started[-1] == (first["id"], "roformer-6", source)
+    cross_track = client.post(
+        f"/api/tracks/{second['id']}/separate",
+        json={"model_id": "roformer-6", "source": source},
+    )
+    assert cross_track.status_code == 400
+    assert "no longer available" in cross_track.json()["detail"]
+
+    (app.state.store.directory(first["id"]) / "runs" / parent_id / "guitar.wav").unlink()
+    stale = client.post(
+        f"/api/tracks/{first['id']}/separate",
+        json={"model_id": "roformer-6", "source": source},
+    )
+    assert stale.status_code == 400
+    assert "audio is no longer accessible" in stale.json()["detail"]
+
+    current = app.state.store.get(first["id"])
+    current["runs"][0]["stems"][0]["file"] = "../outside.wav"
+    app.state.store.put(current)
+    unsafe = client.post(
+        f"/api/tracks/{first['id']}/separate",
+        json={"model_id": "roformer-6", "source": source},
+    )
+    assert unsafe.status_code == 400
+    assert "metadata is unsafe" in unsafe.json()["detail"]
+
+
+def test_expansion_selection_is_scoped_to_exact_parent_stem(application):
+    app, client = application
+    track = upload(client)
+    root_a, root_b, child_a, child_b = [uuid4().hex for _ in range(4)]
+    runs = add_runs(app, track["id"], [root_a, root_b], active_run=root_a)
+    runs.extend(
+        [
+            {
+                "id": child_a,
+                "model_id": "demucs-6",
+                "source": {"type": "stem", "run_id": root_a, "stem_name": "guitar"},
+                "split_number": 1,
+                "stems": [],
+            },
+            {
+                "id": child_b,
+                "model_id": "demucs-6",
+                "source": {"type": "stem", "run_id": root_b, "stem_name": "guitar"},
+                "split_number": 1,
+                "stems": [],
+            },
+        ]
+    )
+    app.state.store.update(track["id"], runs=runs)
+    endpoint = f"/api/tracks/{track['id']}/runs/{root_a}/expansions/guitar"
+
+    assert client.put(endpoint, json={"run_id": child_a}).status_code == 200
+    updated = app.state.store.get(track["id"])
+    assert next(run for run in updated["runs"] if run["id"] == root_a)["active_children"] == {
+        "guitar": child_a
+    }
+    assert next(run for run in updated["runs"] if run["id"] == root_b).get(
+        "active_children", {}
+    ) == {}
+    assert client.put(endpoint, json={"run_id": child_b}).status_code == 400
+    assert client.put(endpoint, json={"run_id": None}).status_code == 200
+    assert next(
+        run for run in app.state.store.get(track["id"])["runs"] if run["id"] == root_a
+    )["active_children"] == {}
 
 
 def test_delete_run_preserves_track_and_falls_back_to_newest_run(application):
@@ -566,6 +666,41 @@ def test_delete_run_preserves_track_and_falls_back_to_newest_run(application):
     assert (runs_folder / run_ids[0] / "guitar.wav").is_file()
     assert (runs_folder / run_ids[4] / "guitar.wav").is_file()
     assert original.read_bytes() == original_bytes
+
+
+def test_delete_child_cascades_descendants_and_restores_parent(application):
+    app, client = application
+    track = upload(client)
+    root_id, child_id, grandchild_id = [uuid4().hex for _ in range(3)]
+    root = add_runs(app, track["id"], [root_id], active_run=root_id)[0]
+    root["active_children"] = {"guitar": child_id}
+    child = {
+        "id": child_id,
+        "model_id": "demucs-6",
+        "source": {"type": "stem", "run_id": root_id, "stem_name": "guitar"},
+        "split_number": 1,
+        "active_children": {"kick": grandchild_id},
+        "stems": [{"name": "kick", "file": "kick.wav"}],
+    }
+    grandchild = {
+        "id": grandchild_id,
+        "model_id": "demucs-6",
+        "source": {"type": "stem", "run_id": child_id, "stem_name": "kick"},
+        "split_number": 1,
+        "stems": [],
+    }
+    for run_id in [child_id, grandchild_id]:
+        (app.state.store.directory(track["id"]) / "runs" / run_id).mkdir(parents=True)
+    app.state.store.update(track["id"], runs=[root, child, grandchild])
+
+    assert client.delete(f"/api/tracks/{track['id']}/runs/{child_id}").status_code == 204
+
+    updated = app.state.store.get(track["id"])
+    assert [run["id"] for run in updated["runs"]] == [root_id]
+    assert updated["runs"][0]["active_children"] == {}
+    assert updated["active_run"] == root_id
+    assert not (app.state.store.directory(track["id"]) / "runs" / child_id).exists()
+    assert not (app.state.store.directory(track["id"]) / "runs" / grandchild_id).exists()
 
 
 def test_delete_run_succeeds_when_windows_still_has_a_stem_open(application, monkeypatch):

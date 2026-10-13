@@ -1,9 +1,15 @@
 export type Stem = { name: string; file: string; url: string; peaks: number[] };
+export type RunSource =
+  { type: "original" } | { type: "stem"; run_id: string; stem_name: string };
 export type Run = {
   id: string;
-  take_number: number;
+  take_number?: number;
+  split_number?: number;
   model_id: string;
   provider_id?: string;
+  source?: RunSource;
+  active_children?: Record<string, string>;
+  next_split_numbers?: Record<string, number>;
   stems: Stem[];
 };
 export type PracticeLoop = {
@@ -28,6 +34,7 @@ export type Track = {
   peaks: number[];
   error: string | null;
   pending_model?: string;
+  pending_source?: RunSource | null;
 };
 export type Model = {
   id: string;
@@ -75,6 +82,8 @@ export type RuntimeStatus = {
 };
 export type Channel = { volume: number; muted: boolean; solo: boolean };
 export type Mix = Record<string, Channel>;
+export const isRootRun = (run: Run) =>
+  !run.source || run.source.type === "original";
 export const active = (track?: Track | null) =>
   !!track && ["queued", "processing"].includes(track.status);
 export const time = (seconds: number) =>

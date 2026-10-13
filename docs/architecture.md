@@ -66,6 +66,26 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
   IDs against the complete API catalog, defaults to compatible curated models and prevents normal separation
   menus from becoming empty. The complete catalog remains in memory for Model Manager and historical run labels.
 
+## Chained separation lineage
+
+Runs form a persisted tree. A new root run records `source: {"type": "original"}`; a child records the exact
+persisted parent with `source: {"type": "stem", "run_id": ..., "stem_name": ...}`. Legacy runs without a
+`source` remain roots. The server resolves a child input only by finding that run and stem in the same track
+manifest and then validating its safe manifest filename and existing WAV. Request paths and filenames are never
+used to infer lineage.
+
+Each run owns an `active_children` map from one of its stem names to a direct child run ID. The mixer walks these
+choices recursively and replaces the parent channel with the selected child's effective channels; it never plays
+both. Clearing a choice restores the parent without deleting any result. Because choices live on their parent
+run, switching root takes preserves independent expansion trees and cannot expose a child from another root.
+Deleting a run deletes its entire descendant subtree and clears references to it before best-effort filesystem
+cleanup.
+
+Only roots receive the track's monotonically increasing `take_number`, so child work cannot create gaps in the
+top-level Listening to menu. Direct children of the same parent stem receive monotonic creation-order
+`split_number` values and are labeled “split N”; a persisted per-stem next counter prevents reuse after deletion,
+and those sibling numbers are never used as root take numbers.
+
 ## Adding a model
 
 Add a curated logical profile with a unique ID, expected stem names, source, checkpoint terms and architecture,
@@ -228,7 +248,7 @@ A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The m
 - This is a single-process local application. Do not start multiple Uvicorn workers against one data folder. A future multi-user service would need database-backed jobs and authentication.
 - All selected stems are decoded into browser memory for sample-synchronized playback and audio-clock-scheduled region transitions. Very long tracks use significant RAM. Streaming or an AudioWorklet ring buffer is a future extension.
 - Speed uses Web Audio source playbackRate for sample-synchronized transport and mirrors that value to `@soundtouchjs/audio-worklet` 2.1.1, whose shared post-mix processor preserves tuning. At 0.5×, SoundTouch's auto WSOLA heuristic lengthens its processing windows for the lower internal tempo; rates of 0.75× and above retain the existing fixed profile. The Pitch slider, exact-value field, and reset control independently set the processor's ±12-semitone offset. SoundTouchJS and its installed support packages are distributed under MPL-2.0.
-- Switching results remounts the audio engine and stops playback. Completing the first separation selects its result automatically. Deleting the selected result first applies the server-equivalent fallback in a synchronous client update, aborting its audio loads before the DELETE request; a failed deletion refreshes authoritative state. Deleting the last result switches to Original mix.
+- Switching results or effective child expansions remounts the audio engine and stops playback. Completing a root separation selects its result automatically; completing a child separation selects that child only for its parent stem. Deleting the selected root first applies the server-equivalent fallback in a synchronous client update, aborting its audio loads before the DELETE request; a failed deletion refreshes authoritative state. Deleting the last root switches to Original mix.
 - Mix preferences and the personal model working set are in localStorage, while the library is on disk. The model
   working set affects only normal selection menus; Model Manager discovery and saved-run model labels use the full
   API catalog. Individual completed separation results can be removed without touching the normalized original or
@@ -237,6 +257,8 @@ A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The m
 - Model prepared-file cleanup is blocked while that model is queued or processing. It is idempotent and does not remove imported audio, track history or completed separation results.
 - Manifests are simple JSON to keep the first version inspectable. SQLite can replace Store without changing the audio worker or mixer.
 - Source audio is never modified. The imported copy is resampled to 44.1 kHz stereo to standardize model and browser alignment. Every stem must have exactly the same frame count before publication.
+- A chained model can only work with the audio preserved by its parent stem. Leakage, missing content, and other
+  first-stage artifacts propagate downstream and cannot be recovered by a later split.
 - Progress reports phases, not fabricated percentages. More granular model callbacks can be added when the runtime provides a stable interface.
 
 

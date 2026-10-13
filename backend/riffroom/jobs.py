@@ -19,6 +19,10 @@ _PROCESS_CONTROL_ERRORS = (ProcessLookupError, OSError, AttributeError, ValueErr
 _DEFAULT = object()
 
 
+class InvalidSeparationSource(ValueError):
+    """The requested persisted stem cannot safely be used as job input."""
+
+
 def _process_group_kwargs(platform: str | None = None, creation_flag: int | None = None) -> dict:
     platform = os.name if platform is None else platform
     if platform != "nt":
@@ -96,15 +100,66 @@ class Jobs:
             return self.runtime.executable() is not None
         return is_provider_available(provider_id, self.provider_registry)
 
-    def start(self, track_id: str, model_id: str):
-        if track_id in self.tasks:
-            raise ValueError("This track is already being separated.")
-        self.store.update(
-            track_id, status="queued", message="Waiting for the separator", error=None, pending_model=model_id
-        )
-        self.tasks[track_id] = asyncio.create_task(self._run(track_id, model_id))
+    def _source_path(self, track_id: str, source: dict) -> Path:
+        folder = self.store.directory(track_id)
+        if source == {"type": "original"}:
+            path = folder / "original.wav"
+            if not path.is_file():
+                raise InvalidSeparationSource("The original audio is no longer accessible.")
+            return path
+        if source.get("type") != "stem":
+            raise InvalidSeparationSource("Unknown separation source.")
 
-    async def _run(self, track_id: str, model_id: str):
+        track = self.store.get(track_id)
+        run = next(
+            (item for item in track.get("runs", []) if item.get("id") == source.get("run_id")),
+            None,
+        )
+        if run is None:
+            raise InvalidSeparationSource("The source separation result is no longer available.")
+        persisted_run_id = run.get("id")
+        if (
+            not isinstance(persisted_run_id, str)
+            or len(persisted_run_id) != 32
+            or any(character not in "0123456789abcdef" for character in persisted_run_id)
+        ):
+            raise InvalidSeparationSource("The source separation metadata is unsafe.")
+        stem = next(
+            (item for item in run.get("stems", []) if item.get("name") == source.get("stem_name")),
+            None,
+        )
+        if stem is None:
+            raise InvalidSeparationSource("The source stem is no longer available.")
+        filename = stem.get("file")
+        if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+            raise InvalidSeparationSource("The source stem metadata is unsafe.")
+        path = folder / "runs" / persisted_run_id / filename
+        if not path.is_file():
+            raise InvalidSeparationSource("The source stem audio is no longer accessible.")
+        return path
+
+    def start(self, track_id: str, model_id: str, source: dict | None = None):
+        # Run deletion uses this same lock. Keep validation, source capture, and
+        # activation indivisible so a persisted source cannot disappear in the
+        # gap between checking it and marking the track busy.
+        with self.store.lock:
+            if track_id in self.tasks:
+                raise ValueError("This track is already being separated.")
+            source = {"type": "original"} if source is None else source
+            source_path = self._source_path(track_id, source)
+            self.store.update(
+                track_id,
+                status="queued",
+                message="Waiting for the separator",
+                error=None,
+                pending_model=model_id,
+                pending_source=source,
+            )
+            self.tasks[track_id] = asyncio.create_task(
+                self._run(track_id, model_id, source, source_path)
+            )
+
+    async def _run(self, track_id: str, model_id: str, source: dict, source_path: Path):
         folder = self.store.directory(track_id)
         run_id = uuid4().hex
         output = folder / "runs" / run_id
@@ -124,7 +179,7 @@ class Jobs:
                             sys.executable,
                             "-m",
                             "riffroom.worker",
-                            str(folder / "original.wav"),
+                            str(source_path),
                             str(output),
                             str(self.cache),
                             model_id,
@@ -158,23 +213,46 @@ class Jobs:
                     stem["url"] = f"/api/tracks/{track_id}/audio/{run_id}/{stem['file']}"
                 with self.store.lock:
                     track = self.store.get(track_id)
-                    take_number = track["next_take_number"]
+                    run = {
+                        "id": run_id,
+                        "model_id": model_id,
+                        "provider_id": provider_id,
+                        "source": source,
+                        "stems": stems,
+                        "active_children": {},
+                    }
+                    if source["type"] == "original":
+                        take_number = track["next_take_number"]
+                        run["take_number"] = take_number
+                        track["next_take_number"] = take_number + 1
+                        track["active_run"] = run_id
+                    else:
+                        siblings = [item for item in track.get("runs", []) if item.get("source") == source]
+                        parent = next(item for item in track["runs"] if item["id"] == source["run_id"])
+                        minimum_split_number = (
+                            max((item.get("split_number", 0) for item in siblings), default=0) + 1
+                        )
+                        next_split_numbers = dict(parent.get("next_split_numbers", {}))
+                        stored_next = next_split_numbers.get(source["stem_name"])
+                        split_number = (
+                            stored_next
+                            if isinstance(stored_next, int)
+                            and not isinstance(stored_next, bool)
+                            and stored_next >= minimum_split_number
+                            else minimum_split_number
+                        )
+                        run["split_number"] = split_number
+                        next_split_numbers[source["stem_name"]] = split_number + 1
+                        parent["next_split_numbers"] = next_split_numbers
+                        active_children = dict(parent.get("active_children", {}))
+                        active_children[source["stem_name"]] = run_id
+                        parent["active_children"] = active_children
                     track.update(
                         status="ready",
                         message="Ready to practice",
-                        runs=track.get("runs", [])
-                        + [
-                            {
-                                "id": run_id,
-                                "take_number": take_number,
-                                "model_id": model_id,
-                                "provider_id": provider_id,
-                                "stems": stems,
-                            }
-                        ],
-                        active_run=run_id,
-                        next_take_number=take_number + 1,
+                        runs=track.get("runs", []) + [run],
                         pending_model=None,
+                        pending_source=None,
                         error=None,
                     )
                     self.store.put(track)
@@ -185,6 +263,7 @@ class Jobs:
                 status="ready" if self.store.get(track_id).get("runs") else "idle",
                 message="Separation cancelled",
                 pending_model=None,
+                pending_source=None,
             )
             shutil.rmtree(output, ignore_errors=True)
             raise
@@ -196,6 +275,7 @@ class Jobs:
                 message="Separation didn't finish",
                 error=str(exc),
                 pending_model=None,
+                pending_source=None,
                 failed_run=run_id,
             )
         finally:
@@ -226,6 +306,7 @@ class Jobs:
                     status="ready" if self.store.get(track_id).get("runs") else "idle",
                     message="Separation cancelled",
                     pending_model=None,
+                    pending_source=None,
                 )
 
     async def close(self):

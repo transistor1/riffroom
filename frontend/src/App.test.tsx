@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   deleteRunAndRefresh,
+  mixerMountKey,
   PORTABLE_RUNTIME_POLL_MS,
   PortableRuntimeInstallProgress,
   removeRunFromState,
@@ -176,5 +177,20 @@ describe("selected separation deletion", () => {
     expect(next.tracks[0].active_run).toBeNull();
     expect(next.tracks[0].runs).toEqual([]);
     expect(selectedRunFor(next.tracks[0], next.runId)).toBeUndefined();
+  });
+});
+
+describe("mixer lifecycle", () => {
+  it("keeps the same mount across expansion changes but not root-take changes", () => {
+    const current = trackWithRuns();
+    const first = current.runs[0];
+    const second = current.runs[1];
+    const before = mixerMountKey(current.id, first);
+
+    first.active_children = { drums: "child-a" };
+
+    expect(mixerMountKey(current.id, first)).toBe(before);
+    expect(mixerMountKey(current.id, second)).not.toBe(before);
+    expect(mixerMountKey(current.id)).toBe(`${current.id}:original`);
   });
 });

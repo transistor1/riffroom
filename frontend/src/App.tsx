@@ -20,6 +20,7 @@ import {
 import { api } from "./api";
 import {
   active,
+  isRootRun,
   time,
   type Model,
   type Run,
@@ -79,13 +80,18 @@ export function selectedRunFor(
   runId: string | null,
 ): Run | undefined {
   return track?.runs.find(
-    (candidate) => candidate.id === (runId ?? track.active_run),
+    (candidate) =>
+      candidate.id === (runId ?? track.active_run) && isRootRun(candidate),
   );
 }
 
 export function separationRunLabel(run: Run, models: Model[]): string {
   const modelName = models.find((model) => model.id === run.model_id)?.name;
-  return `${modelName ?? run.model_id} · take ${run.take_number}`;
+  return `${modelName ?? run.model_id} · take ${run.take_number ?? "?"}`;
+}
+
+export function mixerMountKey(trackId: string, run?: Run): string {
+  return `${trackId}:${run?.id ?? "original"}`;
 }
 
 export function removeRunFromState(
@@ -99,17 +105,37 @@ export function removeRunFromState(
   );
   if (!targetTrack) return { tracks, runId };
 
-  const remaining = targetTrack.runs.filter(
-    (candidate) => candidate.id !== target.runId,
-  );
+  const removed = new Set([target.runId]);
+  while (true) {
+    const before = removed.size;
+    for (const candidate of targetTrack.runs) {
+      if (
+        candidate.source?.type === "stem" &&
+        removed.has(candidate.source.run_id)
+      )
+        removed.add(candidate.id);
+    }
+    if (removed.size === before) break;
+  }
+  const remaining = targetTrack.runs
+    .filter((candidate) => !removed.has(candidate.id))
+    .map((candidate) => ({
+      ...candidate,
+      active_children: Object.fromEntries(
+        Object.entries(candidate.active_children ?? {}).filter(
+          ([, childId]) => !removed.has(childId),
+        ),
+      ),
+    }));
+  const remainingRoots = remaining.filter(isRootRun);
   const activeRun =
-    targetTrack.active_run === target.runId
-      ? (remaining.at(-1)?.id ?? null)
+    targetTrack.active_run && removed.has(targetTrack.active_run)
+      ? (remainingRoots.at(-1)?.id ?? null)
       : targetTrack.active_run;
   const nextTrack = { ...targetTrack, runs: remaining, active_run: activeRun };
   const selectedRunId = runId ?? targetTrack.active_run;
   const nextRunId =
-    selectedId === target.trackId && selectedRunId === target.runId
+    selectedId === target.trackId && selectedRunId && removed.has(selectedRunId)
       ? (activeRun ?? "original")
       : runId;
   return {
@@ -208,6 +234,7 @@ export default function App() {
   const fileInput = useRef<HTMLInputElement>(null);
   const track = tracks.find((t) => t.id === selectedId);
   const run = selectedRunFor(track, runId);
+  const rootRuns = track?.runs.filter(isRootRun) ?? [];
   const model = models.find((m) => m.id === modelId);
   const curatedModels = models.filter((item) => item.curated);
   const visibleModels = models.filter(
@@ -338,7 +365,9 @@ export default function App() {
     setRunId(null);
     setImportOpen(false);
     const preferredModelId =
-      t.runs.at(-1)?.model_id ?? t.pending_model ?? "demucs-6";
+      t.runs.filter(isRootRun).at(-1)?.model_id ??
+      t.pending_model ??
+      "demucs-6";
     setModelId(
       visibleModelIds?.includes(preferredModelId)
         ? preferredModelId
@@ -449,6 +478,23 @@ export default function App() {
       await refresh();
     }
   }
+  async function selectExpansion(
+    parentRunId: string,
+    stemName: string,
+    childRunId: string | null,
+  ) {
+    if (!track) return;
+    await action(() =>
+      api(
+        `/tracks/${track.id}/runs/${parentRunId}/expansions/${encodeURIComponent(stemName)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_id: childRunId }),
+        },
+      ),
+    );
+  }
   const showImport = importOpen || !track;
   return (
     <div
@@ -509,7 +555,7 @@ export default function App() {
                     ? "Separating…"
                     : t.status === "error"
                       ? "Needs attention"
-                      : `${time(t.duration)} · ${t.runs.length ? `${t.runs.at(-1)!.stems.length} stems` : "Original"}`}
+                      : `${time(t.duration)} · ${t.runs.some(isRootRun) ? `${t.runs.filter(isRootRun).at(-1)!.stems.length} stems` : "Original"}`}
                 </small>
               </span>
               {t.id === selectedId && <span className="library-dot" />}
@@ -726,7 +772,7 @@ export default function App() {
                   </div>
                 </div>
               )}
-              {track.runs.length > 0 && (
+              {rootRuns.length > 0 && (
                 <div className="run-select">
                   <div className="run-picker">
                     <label>
@@ -737,7 +783,7 @@ export default function App() {
                         onChange={(e) => setRunId(e.target.value)}
                       >
                         <option value="original">Original mix</option>
-                        {track.runs.map((r) => (
+                        {rootRuns.map((r) => (
                           <option key={r.id} value={r.id}>
                             {separationRunLabel(r, models)}
                           </option>
@@ -766,9 +812,37 @@ export default function App() {
                 </div>
               )}
               <Mixer
-                key={`${track.id}:${run?.id ?? "original"}`}
+                key={mixerMountKey(track.id, run)}
                 track={track}
                 run={run}
+                models={visibleModels}
+                modelCatalog={models}
+                busy={active(track)}
+                onSeparateStem={(parentRunId, stemName, nextModelId) =>
+                  void action(() =>
+                    api(
+                      `/tracks/${track.id}/separate`,
+                      json({
+                        model_id: nextModelId,
+                        source: {
+                          type: "stem",
+                          run_id: parentRunId,
+                          stem_name: stemName,
+                        },
+                      }),
+                    ),
+                  )
+                }
+                onSelectExpansion={(parentRunId, stemName, childRunId) =>
+                  void selectExpansion(parentRunId, stemName, childRunId)
+                }
+                onDeleteRun={(childRunId) =>
+                  setDeleteTarget({
+                    kind: "run",
+                    trackId: track.id,
+                    runId: childRunId,
+                  })
+                }
               />
               <section className="model-footer panel">
                 <div className="model-footer-heading">
@@ -1203,8 +1277,9 @@ export default function App() {
               </p>
             ) : deleteTarget.kind === "run" ? (
               <p>
-                This removes only this generated set of stems. Your original
-                audio and other separation results will remain.
+                This removes this generated set of stems and every later split
+                made from it. Your original audio and unrelated results will
+                remain.
               </p>
             ) : (
               <p>

@@ -16,15 +16,21 @@ import {
   RotateCcw,
   SkipBack,
   SlidersHorizontal,
+  Split,
+  Trash2,
   Volume2,
   Mic2,
 } from "lucide-react";
 import { loadPractice, savePractice } from "../api";
 import { MixerEngine } from "../audio";
 import {
-  time, preciseTime, parseTime, type PracticeLoop,
+  time,
+  preciseTime,
+  parseTime,
+  type PracticeLoop,
   type Channel,
   type Mix,
+  type Model,
   type Run,
   type Stem,
   type Track,
@@ -53,9 +59,163 @@ const defaults = (stems: Stem[]): Mix =>
   Object.fromEntries(
     stems.map((s) => [s.name, { volume: 1, muted: false, solo: false }]),
   );
-export default function Mixer({ track, run }: { track: Track; run?: Run }) {
+
+export function mixForStems(saved: Mix, stems: Stem[]): Mix {
+  const mix = defaults(stems);
+  for (const name in mix) {
+    const channel = saved[name];
+    if (channel && Number.isFinite(channel.volume)) {
+      mix[name] = {
+        volume: Math.max(0, Math.min(2, channel.volume)),
+        muted: !!channel.muted,
+        solo: !!channel.solo,
+      };
+    }
+  }
+  return mix;
+}
+
+export function preserveStemMix(saved: Mix, stems: Stem[]): Mix {
+  const visible = mixForStems(saved, stems);
+  return Object.keys(visible).every((name) => saved[name])
+    ? saved
+    : { ...saved, ...visible };
+}
+
+export async function reloadMixerGraph(
+  player: MixerEngine,
+  stems: Stem[],
+  mix: Mix,
+  signal: AbortSignal,
+  resumeAt: number,
+): Promise<number | null> {
+  player.setMix(mix);
+  await player.load(stems, signal);
+  if (signal.aborted) return null;
+  const restored = Math.min(resumeAt, player.duration);
+  player.seek(restored);
+  return restored;
+}
+
+export type EffectiveStem = Stem & {
+  displayName: string;
+  sourceRunId: string;
+  sourceStemName: string;
+  depth: number;
+  context: string;
+};
+
+export type ExpansionPoint = {
+  parentRunId: string;
+  parentStemName: string;
+  context: string;
+  activeChildId: string | null;
+  children: Run[];
+};
+
+export function resolveEffectiveMixer(
+  track: Track,
+  root: Run,
+): { stems: EffectiveStem[]; expansions: ExpansionPoint[] } {
+  const runs = new Map(
+    track.runs.map((candidate) => [candidate.id, candidate]),
+  );
+  const stems: EffectiveStem[] = [];
+  const expansions: ExpansionPoint[] = [];
+
+  function visit(
+    run: Run,
+    stem: Stem,
+    depth: number,
+    context: string,
+    ancestors: Set<string>,
+  ) {
+    const source = {
+      type: "stem",
+      run_id: run.id,
+      stem_name: stem.name,
+    } as const;
+    const children = track.runs.filter(
+      (candidate) =>
+        candidate.source?.type === "stem" &&
+        candidate.source.run_id === source.run_id &&
+        candidate.source.stem_name === source.stem_name,
+    );
+    const selectedId = run.active_children?.[stem.name] ?? null;
+    const selected = selectedId ? runs.get(selectedId) : undefined;
+    const active =
+      selected?.source?.type === "stem" &&
+      selected.source.run_id === run.id &&
+      selected.source.stem_name === stem.name &&
+      !ancestors.has(selected.id)
+        ? selected
+        : undefined;
+    if (children.length || active) {
+      expansions.push({
+        parentRunId: run.id,
+        parentStemName: stem.name,
+        context,
+        activeChildId: active?.id ?? null,
+        children,
+      });
+    }
+    if (active) {
+      const nextAncestors = new Set(ancestors).add(active.id);
+      for (const childStem of active.stems) {
+        visit(
+          active,
+          childStem,
+          depth + 1,
+          `${context} › ${childStem.name}`,
+          nextAncestors,
+        );
+      }
+      return;
+    }
+    stems.push({
+      ...stem,
+      name: depth === 0 ? stem.name : `${run.id}:${stem.name}`,
+      displayName: stem.name,
+      sourceRunId: run.id,
+      sourceStemName: stem.name,
+      depth,
+      context,
+    });
+  }
+
+  for (const stem of root.stems)
+    visit(root, stem, 0, stem.name, new Set([root.id]));
+  return { stems, expansions };
+}
+
+type MixerProps = {
+  track: Track;
+  run?: Run;
+  models?: Model[];
+  modelCatalog?: Model[];
+  busy?: boolean;
+  onSeparateStem?: (runId: string, stemName: string, modelId: string) => void;
+  onSelectExpansion?: (
+    runId: string,
+    stemName: string,
+    childId: string | null,
+  ) => void;
+  onDeleteRun?: (runId: string) => void;
+};
+
+export default function Mixer({
+  track,
+  run,
+  models = [],
+  modelCatalog = models,
+  busy = false,
+  onSeparateStem,
+  onSelectExpansion,
+  onDeleteRun,
+}: MixerProps) {
   const original = !run;
-  const stems = run?.stems ?? [
+  const resolved = run ? resolveEffectiveMixer(track, run) : null;
+  const stems = resolved?.stems ?? [
     {
       name: "original",
       file: "original.wav",
@@ -70,17 +230,7 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
       const saved = JSON.parse(
         localStorage.getItem(`riffroom:mix:${key}`) ?? "null",
       );
-      const clean = defaults(stems);
-      for (const name in clean) {
-        const c = saved?.[name];
-        if (c && Number.isFinite(c.volume))
-          clean[name] = {
-            volume: Math.max(0, Math.min(2, c.volume)),
-            muted: !!c.muted,
-            solo: !!c.solo,
-          };
-      }
-      return clean;
+      return { ...(saved ?? {}), ...mixForStems(saved ?? {}, stems) };
     } catch {
       return defaults(stems);
     }
@@ -97,6 +247,13 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
   const [loopMode, setLoopMode] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState("");
+  const [splitModels, setSplitModels] = useState<Record<string, string>>({});
+  const effectiveMix = mixForStems(mix, stems);
+  const mixRef = useRef(effectiveMix);
+  const positionRef = useRef(position);
+  mixRef.current = effectiveMix;
+  positionRef.current = position;
+  const graphKey = stems.map((stem) => `${stem.name}:${stem.url}`).join("|");
   const edited = useRef(false);
   const pending = useRef<PracticeLoop[] | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -115,6 +272,11 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
     };
   }, [track.id]);
   useEffect(() => { engine.current?.setLoopPlan(loopMode, loops); }, [loopMode, loops]);
+  useEffect(() => {
+    setMix((current) => preserveStemMix(current, stems));
+    // Stem identity, not the array allocated during render, defines the graph.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphKey]);
   function updateLoops(next: PracticeLoop[]) {
     edited.current = true;
     setLoops(next);
@@ -152,16 +314,6 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
     engine.current = player;
     // The syncing effect above runs before creation on mount; seed this engine too.
     player.setLoopPlan(loopMode, loops);
-    const controller = new AbortController();
-    player.setMix(mix);
-    player
-      .load(stems, controller.signal)
-      .then(() => {
-        if (!controller.signal.aborted) setLoaded(true);
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) setError(e.message);
-      });
     const timer = window.setInterval(() => {
       const p = player.position();
       if (player.playing && !player.looping && p >= player.duration)
@@ -170,21 +322,45 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
       setPlaying(player.playing);
     }, 50);
     return () => {
-      controller.abort();
       clearInterval(timer);
       player.dispose();
     };
-    // Parent remounts the mixer when a run changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
-    engine.current?.setMix(mix);
+    const player = engine.current!;
+    const controller = new AbortController();
+    const resumeAt = player.position() || positionRef.current;
+    setLoaded(false);
+    setPlaying(false);
+    reloadMixerGraph(
+      player,
+      stems,
+      mixRef.current,
+      controller.signal,
+      resumeAt,
+    )
+      .then((restored) => {
+        if (restored === null) return;
+        setPosition(restored);
+        setLoaded(true);
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setError(e.message);
+      });
+    return () => controller.abort();
+    // Reload only when the effective audio graph changes. Transport and editor
+    // state stay mounted, while a new root take still remounts via App's key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphKey]);
+  useEffect(() => {
+    engine.current?.setMix(effectiveMix);
     try {
       localStorage.setItem(`riffroom:mix:${key}`, JSON.stringify(mix));
     } catch {
       /* Storage may be disabled. */
     }
-  }, [mix, key]);
+  }, [mix, key, graphKey]);
   const toggle = useCallback(() => {
     if (!loaded) return;
     const player = engine.current!;
@@ -241,9 +417,12 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
     if (Number.isFinite(next)) applyPitch(next);
     else setPitchInput(pitch.toFixed(1));
   }
-  const soloed = Object.values(mix).some((c) => c.solo);
+  const soloed = Object.values(effectiveMix).some((c) => c.solo);
   const withoutGuitar =
-    !original && !!mix.guitar && mix.guitar.muted && !soloed;
+    !original &&
+    !!effectiveMix.guitar &&
+    effectiveMix.guitar.muted &&
+    !soloed;
   return (
     <>
       {error && (
@@ -444,7 +623,12 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
               : "Make room for your guitar"}
           </span>
         </div>
-        <button className="text-button" onClick={() => setMix(defaults(stems))}>
+        <button
+          className="text-button"
+          onClick={() =>
+            setMix((current) => ({ ...current, ...defaults(stems) }))
+          }
+        >
           <RotateCcw size={14} /> Reset mix
         </button>
       </div>
@@ -455,20 +639,20 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
             onClick={() => {
               const next = defaults(stems);
               if (next.guitar) next.guitar.muted = true;
-              setMix(next);
+              setMix((current) => ({ ...current, ...next }));
             }}
-            disabled={!mix.guitar}
+            disabled={!effectiveMix.guitar}
           >
             <Guitar size={16} /> Play guitar with the band
             {withoutGuitar && <Check size={14} />}
           </button>
           <button
             className="preset"
-            disabled={!mix.guitar}
+            disabled={!effectiveMix.guitar}
             onClick={() => {
               const next = defaults(stems);
               if (next.guitar) next.guitar.solo = true;
-              setMix(next);
+              setMix((current) => ({ ...current, ...next }));
             }}
           >
             <Headphones size={16} /> Hear just the guitar
@@ -476,10 +660,58 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
         </div>
       )}
       <div className="stem-list">
+        {resolved?.expansions.map((point) => (
+          <div
+            className="stem-expansion"
+            key={`${point.parentRunId}:${point.parentStemName}`}
+          >
+            <div>
+              <Split size={14} />
+              <span>
+                <strong>{point.context}</strong> is split further
+              </span>
+            </div>
+            <select
+              aria-label={`Split used for ${point.context}`}
+              value={point.activeChildId ?? "parent"}
+              disabled={busy}
+              onChange={(event) =>
+                onSelectExpansion?.(
+                  point.parentRunId,
+                  point.parentStemName,
+                  event.target.value === "parent" ? null : event.target.value,
+                )
+              }
+            >
+              <option value="parent">Use unsplit {point.parentStemName}</option>
+              {point.children.map((child) => (
+                <option value={child.id} key={child.id}>
+                  {modelCatalog.find((model) => model.id === child.model_id)
+                    ?.name ?? child.model_id}
+                  {` · split ${child.split_number ?? "?"}`}
+                </option>
+              ))}
+            </select>
+            {point.activeChildId && (
+              <button
+                className="icon-button"
+                aria-label={`Delete selected split for ${point.context}`}
+                disabled={busy}
+                onClick={() => onDeleteRun?.(point.activeChildId!)}
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        ))}
         {stems.map((stem) => {
-          const c = mix[stem.name],
-            Icon = icons[stem.name] ?? Music2,
-            color = colors[stem.name] ?? "#aebec9";
+          const c = effectiveMix[stem.name],
+            effective = stem as EffectiveStem,
+            displayName = effective.displayName ?? stem.name,
+            Icon = icons[displayName] ?? Music2,
+            color = colors[displayName] ?? "#aebec9",
+            splitKey = `${effective.sourceRunId}:${effective.sourceStemName}`,
+            splitModel = splitModels[splitKey] ?? models[0]?.id ?? "";
           const silent = c.muted || (soloed && !c.solo);
           return (
             <article
@@ -491,8 +723,11 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
                 <Icon size={21} />
               </div>
               <div className="stem-name">
-                <strong>{stem.name}</strong>
-                <span>{c.solo ? "Solo" : silent ? "Muted" : "Stereo"}</span>
+                <strong>{displayName}</strong>
+                <span>
+                  {effective.depth ? `${effective.context} · ` : ""}
+                  {c.solo ? "Solo" : silent ? "Muted" : "Stereo"}
+                </span>
               </div>
               <div className="stem-wave">
                 <Waveform
@@ -501,7 +736,7 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
                   progress={position / track.duration}
                 />
                 <input
-                  aria-label={`Seek ${stem.name}`}
+                  aria-label={`Seek ${effective.context}`}
                   type="range"
                   min="0"
                   max={track.duration}
@@ -515,7 +750,7 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
                   className={
                     c.muted ? "channel-button muted" : "channel-button"
                   }
-                  aria-label={`Mute ${stem.name}`}
+                  aria-label={`Mute ${effective.context}`}
                   aria-pressed={c.muted}
                   onClick={() => change(stem.name, { muted: !c.muted })}
                 >
@@ -523,16 +758,50 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
                 </button>
                 <button
                   className={c.solo ? "channel-button solo" : "channel-button"}
-                  aria-label={`Solo ${stem.name}`}
+                  aria-label={`Solo ${effective.context}`}
                   aria-pressed={c.solo}
                   onClick={() => change(stem.name, { solo: !c.solo })}
                 >
                   S
                 </button>
               </div>
+              {!original && (
+                <div className="stem-split-action">
+                  <select
+                    aria-label={`Model to split ${effective.context}`}
+                    value={splitModel}
+                    disabled={busy || !models.length}
+                    onChange={(event) =>
+                      setSplitModels((current) => ({
+                        ...current,
+                        [splitKey]: event.target.value,
+                      }))
+                    }
+                  >
+                    {models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="small-button"
+                    disabled={busy || !splitModel}
+                    onClick={() =>
+                      onSeparateStem?.(
+                        effective.sourceRunId,
+                        effective.sourceStemName,
+                        splitModel,
+                      )
+                    }
+                  >
+                    <Split size={13} /> Split further
+                  </button>
+                </div>
+              )}
               <div className="stem-volume">
                 <input
-                  aria-label={`${stem.name} volume`}
+                  aria-label={`${effective.context} volume`}
                   type="range"
                   min="0"
                   max="2"
@@ -547,9 +816,9 @@ export default function Mixer({ track, run }: { track: Track; run?: Run }) {
               <a
                 className="icon-button download"
                 href={stem.url}
-                download={`${track.title}-${stem.name}.wav`}
-                title={`Download ${stem.name}`}
-                aria-label={`Download ${stem.name}`}
+                download={`${track.title}-${displayName}.wav`}
+                title={`Download ${displayName}`}
+                aria-label={`Download ${displayName}`}
               >
                 <ArrowDownToLine size={15} />
               </a>

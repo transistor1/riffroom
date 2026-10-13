@@ -37,8 +37,12 @@ Song splitting is approximate: expect some instrument bleed and artifacts, espec
 3. **Play guitar with the band** mutes the guitar. **Hear just the guitar** solos it.
 4. Use each stem's **M**, **S**, and volume slider. Volume runs from 0–200%; the master sets overall output. Multiple solos work together; mute takes precedence.
 5. Seek to a passage and click **Add loop**. Name it, edit start/end as seconds or **m:ss.mmm**, or nudge either boundary by **±0.1s**. Select the loops you want and enable **Loop** to cycle through them in timeline order, skipping gaps. Space plays/pauses, and arrow keys skip five seconds when you aren't editing a control.
-6. Try another model from the bottom of the track page. Each completed run remains available in **Listening to**, alongside the original.
-7. Use a stem's download arrow to save its WAV file.
+6. Try another model from the bottom of the track page. Each completed root run remains available in **Listening to**, alongside the original.
+7. Use **Split further** on a stem to run another visible, compatible model on that part. The child stems replace
+   their parent in the mixer; use the split selector to return to the unsplit parent or choose another saved split.
+   Splits can be chained recursively. Because each stage only receives its parent stem, leakage or missing audio
+   from an earlier stage carries into every later stage.
+8. Use a stem's download arrow to save its WAV file.
 
 Mix levels, mutes, and solos are remembered per result in this browser. Track audio and all completed separation results persist on disk. Named loops and their selection checkboxes are saved with the song and shared across results. Loop mode defaults off each time the mixer opens. Play position, speed, and master output reset when changing results. Speed changes tempo while preserving tuning, and the Pitch control transposes playback independently.
 

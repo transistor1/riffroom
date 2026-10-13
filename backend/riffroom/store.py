@@ -17,6 +17,12 @@ class Store:
         return self.root / track_id
 
     @staticmethod
+    def is_root_run(run) -> bool:
+        """Legacy runs without lineage and explicit original runs are root takes."""
+        source = run.get("source")
+        return source is None or (isinstance(source, dict) and source.get("type") == "original")
+
+    @staticmethod
     def _ensure_take_numbers(track) -> bool:
         """Upgrade legacy run metadata without changing established take numbers."""
         runs = track.get("runs")
@@ -27,6 +33,8 @@ class Store:
         used = set()
         missing = []
         for run in runs:
+            if not Store.is_root_run(run):
+                continue
             take_number = run.get("take_number")
             if (
                 isinstance(take_number, int)

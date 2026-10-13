@@ -811,6 +811,28 @@ h1 em {
   flex-direction: column;
   gap: 8px;
 }
+.stem-expansion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid #46513d;
+  border-radius: 7px;
+  background: #252c24;
+  color: #a9b89d;
+  font-size: 10px;
+}
+.stem-expansion > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+}
+.stem-expansion select,
+.stem-split-action select {
+  max-width: 190px;
+  font-size: 9px;
+}
 .stem-row {
   display: flex;
   align-items: center;
@@ -874,6 +896,18 @@ h1 em {
 .stem-actions {
   display: flex;
   gap: 5px;
+}
+.stem-split-action {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: stretch;
+}
+.stem-split-action .small-button {
+  white-space: nowrap;
+  justify-content: center;
+  padding: 5px 7px;
+  font-size: 9px;
 }
 .channel-button {
   width: 27px;
