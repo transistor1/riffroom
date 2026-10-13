@@ -3,6 +3,7 @@ import {
   ArrowDownToLine,
   AudioLines,
   Check,
+  ChevronDown,
   Disc3,
   Drum,
   Guitar,
@@ -101,9 +102,218 @@ export type EffectiveStem = Stem & {
   displayName: string;
   sourceRunId: string;
   sourceStemName: string;
+  logicalPart: string;
   depth: number;
   context: string;
 };
+
+const genericStemNames = new Set([
+  "other",
+  "instrumental",
+  "music",
+  "no_vocals",
+  "karaoke",
+]);
+
+const normalizedStemName = (name: string) =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+export function derivePerformanceParts(root: Run): string[] {
+  return root.stems
+    .map((stem) => stem.name)
+    .filter((name) => !genericStemNames.has(normalizedStemName(name)));
+}
+
+export function performancePartPreferenceKey(trackId: string): string {
+  return `riffroom:performance-part:${trackId}`;
+}
+
+type PreferenceStorage = Pick<Storage, "getItem" | "setItem">;
+
+export function chooseInitialPerformancePart(
+  availableParts: string[],
+): string | null {
+  return (
+    availableParts.find((part) => normalizedStemName(part) === "guitar") ??
+    availableParts[0] ??
+    null
+  );
+}
+
+export function loadPerformancePartPreference(
+  trackId: string,
+  availableParts: string[],
+  storage: PreferenceStorage,
+): string | null {
+  const key = performancePartPreferenceKey(trackId);
+  const stored = storage.getItem(key);
+  if (stored) return stored;
+  const initial = chooseInitialPerformancePart(availableParts);
+  if (initial) storage.setItem(key, initial);
+  return initial;
+}
+
+export function savePerformancePartPreference(
+  trackId: string,
+  part: string,
+  storage: PreferenceStorage,
+) {
+  storage.setItem(performancePartPreferenceKey(trackId), part);
+}
+
+export function isPerformancePartAvailable(
+  preferredPart: string | null,
+  availableParts: string[],
+): boolean {
+  return !!preferredPart && availableParts.includes(preferredPart);
+}
+
+const partLabel = (part: string) =>
+  normalizedStemName(part).replaceAll("_", " ");
+
+export function performancePartCopy(part: string): {
+  primary: string;
+  secondary: string;
+} {
+  const label = partLabel(part);
+  return {
+    primary:
+      normalizedStemName(part) === "vocals"
+        ? "Sing with the band"
+        : `Play ${label} with the band`,
+    secondary: `Hear just the ${label}`,
+  };
+}
+
+export type PerformanceShortcutMode =
+  | "none"
+  | "play-with-band"
+  | "hear-just";
+
+export type PerformanceShortcutState = {
+  mode: PerformanceShortcutMode;
+  part: string | null;
+  previous: {
+    muted: Record<string, boolean>;
+    solo: Record<string, boolean>;
+  };
+};
+
+export type PerformanceShortcutResult = {
+  mix: Mix;
+  shortcut: PerformanceShortcutState;
+};
+
+export const noPerformanceShortcut = (): PerformanceShortcutState => ({
+  mode: "none",
+  part: null,
+  previous: { muted: {}, solo: {} },
+});
+
+export function restorePerformanceShortcut(
+  mix: Mix,
+  shortcut: PerformanceShortcutState,
+): Mix {
+  if (shortcut.mode === "none") return mix;
+  let next = mix;
+  for (const field of ["muted", "solo"] as const) {
+    for (const [name, value] of Object.entries(shortcut.previous[field])) {
+      if (!mix[name]) continue;
+      if (next === mix) next = { ...mix };
+      next[name] = { ...next[name], [field]: value };
+    }
+  }
+  return next;
+}
+
+export function transitionPerformanceShortcut(
+  mix: Mix,
+  stems: EffectiveStem[],
+  shortcut: PerformanceShortcutState,
+  mode: PerformanceShortcutMode,
+  part: string,
+): PerformanceShortcutResult {
+  const restored = restorePerformanceShortcut(mix, shortcut);
+  if (mode === "none") {
+    return { mix: restored, shortcut: noPerformanceShortcut() };
+  }
+
+  const next = { ...restored };
+  const previous: PerformanceShortcutState["previous"] = {
+    muted: {},
+    solo: {},
+  };
+  if (mode === "hear-just") {
+    for (const [name, channel] of Object.entries(restored)) {
+      previous.solo[name] = channel.solo;
+    }
+  }
+  for (const stem of stems) {
+    const channel = restored[stem.name];
+    if (!channel) continue;
+    if (mode === "play-with-band") {
+      if (stem.logicalPart !== part) continue;
+      previous.muted[stem.name] = channel.muted;
+      next[stem.name] = { ...channel, muted: true };
+    } else {
+      if (stem.logicalPart === part) {
+        previous.muted[stem.name] = channel.muted;
+      }
+      next[stem.name] = {
+        ...channel,
+        muted: stem.logicalPart === part ? false : channel.muted,
+        solo: stem.logicalPart === part,
+      };
+    }
+  }
+  return { mix: next, shortcut: { mode, part, previous } };
+}
+
+export function retargetPerformanceShortcut(
+  mix: Mix,
+  stems: EffectiveStem[],
+  shortcut: PerformanceShortcutState,
+  part: string,
+): PerformanceShortcutResult {
+  if (shortcut.mode === "none") return { mix, shortcut };
+  return transitionPerformanceShortcut(
+    mix,
+    stems,
+    shortcut,
+    shortcut.mode,
+    part,
+  );
+}
+
+export function applyManualChannelChange(
+  mix: Mix,
+  stems: EffectiveStem[],
+  shortcut: PerformanceShortcutState,
+  name: string,
+  values: Partial<Channel>,
+): PerformanceShortcutResult {
+  const selectedFamilyMuteChanged =
+    values.muted !== undefined &&
+    stems.some(
+      (stem) => stem.name === name && stem.logicalPart === shortcut.part,
+    );
+  const invalidatesShortcut =
+    shortcut.mode !== "none" &&
+    (values.solo !== undefined || selectedFamilyMuteChanged);
+  const baseline = invalidatesShortcut
+    ? restorePerformanceShortcut(mix, shortcut)
+    : mix;
+  return {
+    mix: {
+      ...baseline,
+      [name]: { ...baseline[name], ...values },
+    },
+    shortcut: invalidatesShortcut ? noPerformanceShortcut() : shortcut,
+  };
+}
 
 export type ExpansionPoint = {
   parentRunId: string;
@@ -129,6 +339,7 @@ export function resolveEffectiveMixer(
     depth: number,
     context: string,
     ancestors: Set<string>,
+    logicalPart: string,
   ) {
     const source = {
       type: "stem",
@@ -168,6 +379,7 @@ export function resolveEffectiveMixer(
           depth + 1,
           `${context} › ${childStem.name}`,
           nextAncestors,
+          logicalPart,
         );
       }
       return;
@@ -178,13 +390,14 @@ export function resolveEffectiveMixer(
       displayName: stem.name,
       sourceRunId: run.id,
       sourceStemName: stem.name,
+      logicalPart,
       depth,
       context,
     });
   }
 
   for (const stem of root.stems)
-    visit(root, stem, 0, stem.name, new Set([root.id]));
+    visit(root, stem, 0, stem.name, new Set([root.id]), stem.name);
   return { stems, expansions };
 }
 
@@ -223,6 +436,7 @@ export default function Mixer({
       peaks: track.peaks,
     },
   ];
+  const availableParts = run ? derivePerformanceParts(run) : [];
   const key = `${track.id}:${run?.id ?? "original"}`;
   const engine = useRef<MixerEngine | null>(null);
   const [mix, setMix] = useState<Mix>(() => {
@@ -248,6 +462,23 @@ export default function Mixer({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState("");
   const [splitModels, setSplitModels] = useState<Record<string, string>>({});
+  const [preferredPart, setPreferredPart] = useState<string | null>(() => {
+    if (!run) return null;
+    try {
+      return loadPerformancePartPreference(
+        track.id,
+        availableParts,
+        localStorage,
+      );
+    } catch {
+      return chooseInitialPerformancePart(availableParts);
+    }
+  });
+  const [partMenuOpen, setPartMenuOpen] = useState(false);
+  const [shortcut, setShortcutState] = useState<PerformanceShortcutState>(
+    noPerformanceShortcut,
+  );
+  const shortcutRef = useRef(shortcut);
   const effectiveMix = mixForStems(mix, stems);
   const mixRef = useRef(effectiveMix);
   const positionRef = useRef(position);
@@ -273,7 +504,19 @@ export default function Mixer({
   }, [track.id]);
   useEffect(() => { engine.current?.setLoopPlan(loopMode, loops); }, [loopMode, loops]);
   useEffect(() => {
-    setMix((current) => preserveStemMix(current, stems));
+    const preserved = preserveStemMix(mix, stems);
+    const next =
+      shortcutRef.current.mode === "none"
+        ? { mix: preserved, shortcut: shortcutRef.current }
+        : retargetPerformanceShortcut(
+            preserved,
+            stems as EffectiveStem[],
+            shortcutRef.current,
+            shortcutRef.current.part!,
+          );
+    shortcutRef.current = next.shortcut;
+    setShortcutState(next.shortcut);
+    setMix(next.mix);
     // Stem identity, not the array allocated during render, defines the graph.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphKey]);
@@ -356,11 +599,14 @@ export default function Mixer({
   useEffect(() => {
     engine.current?.setMix(effectiveMix);
     try {
-      localStorage.setItem(`riffroom:mix:${key}`, JSON.stringify(mix));
+      localStorage.setItem(
+        `riffroom:mix:${key}`,
+        JSON.stringify(restorePerformanceShortcut(mix, shortcut)),
+      );
     } catch {
       /* Storage may be disabled. */
     }
-  }, [mix, key, graphKey]);
+  }, [mix, shortcut, key, graphKey]);
   const toggle = useCallback(() => {
     if (!loaded) return;
     const player = engine.current!;
@@ -393,10 +639,16 @@ export default function Mixer({
     return () => window.removeEventListener("keydown", keyboard);
   }, [toggle, position]);
   function change(name: string, values: Partial<Channel>) {
-    setMix((current) => ({
-      ...current,
-      [name]: { ...current[name], ...values },
-    }));
+    const next = applyManualChannelChange(
+      mix,
+      stems as EffectiveStem[],
+      shortcutRef.current,
+      name,
+      values,
+    );
+    shortcutRef.current = next.shortcut;
+    setShortcutState(next.shortcut);
+    setMix(next.mix);
   }
   function seek(next: number) {
     engine.current?.seek(next);
@@ -417,12 +669,58 @@ export default function Mixer({
     if (Number.isFinite(next)) applyPitch(next);
     else setPitchInput(pitch.toFixed(1));
   }
-  const soloed = Object.values(effectiveMix).some((c) => c.solo);
-  const withoutGuitar =
-    !original &&
-    !!effectiveMix.guitar &&
-    effectiveMix.guitar.muted &&
-    !soloed;
+  const soloed = Object.values(effectiveMix).some((channel) => channel.solo);
+  const preferredPartAvailable = isPerformancePartAvailable(
+    preferredPart,
+    availableParts,
+  );
+  const playWithBandActive = shortcut.mode === "play-with-band";
+  const hearJustActive = shortcut.mode === "hear-just";
+  const presetCopy = preferredPart
+    ? performancePartCopy(preferredPart)
+    : {
+        primary: "Play with the band",
+        secondary: "Hear just the part",
+      };
+  const PartIcon = preferredPart
+    ? (icons[normalizedStemName(preferredPart)] ?? Music2)
+    : Music2;
+  function selectPerformancePart(part: string) {
+    if (resolved && shortcutRef.current.mode !== "none") {
+      const next = retargetPerformanceShortcut(
+        mix,
+        resolved.stems,
+        shortcutRef.current,
+        part,
+      );
+      shortcutRef.current = next.shortcut;
+      setShortcutState(next.shortcut);
+      setMix(next.mix);
+    }
+    setPreferredPart(part);
+    setPartMenuOpen(false);
+    try {
+      savePerformancePartPreference(track.id, part, localStorage);
+    } catch {
+      /* Storage may be disabled. */
+    }
+  }
+  function setPerformanceShortcut(
+    mode: Exclude<PerformanceShortcutMode, "none">,
+  ) {
+    if (!preferredPart || !resolved) return;
+    const nextMode = shortcutRef.current.mode === mode ? "none" : mode;
+    const next = transitionPerformanceShortcut(
+      mix,
+      resolved.stems,
+      shortcutRef.current,
+      nextMode,
+      preferredPart,
+    );
+    shortcutRef.current = next.shortcut;
+    setShortcutState(next.shortcut);
+    setMix(next.mix);
+  }
   return (
     <>
       {error && (
@@ -620,42 +918,79 @@ export default function Mixer({
           <span>
             {original
               ? "Listen while your stems are being prepared"
-              : "Make room for your guitar"}
+              : "Make room for your part"}
           </span>
         </div>
         <button
           className="text-button"
-          onClick={() =>
-            setMix((current) => ({ ...current, ...defaults(stems) }))
-          }
+          onClick={() => {
+            const nextShortcut = noPerformanceShortcut();
+            shortcutRef.current = nextShortcut;
+            setShortcutState(nextShortcut);
+            setMix((current) => ({ ...current, ...defaults(stems) }));
+          }}
         >
           <RotateCcw size={14} /> Reset mix
         </button>
       </div>
       {!original && (
         <div className="presets">
-          <button
-            className={`preset ${withoutGuitar ? "selected" : ""}`}
-            onClick={() => {
-              const next = defaults(stems);
-              if (next.guitar) next.guitar.muted = true;
-              setMix((current) => ({ ...current, ...next }));
-            }}
-            disabled={!effectiveMix.guitar}
-          >
-            <Guitar size={16} /> Play guitar with the band
-            {withoutGuitar && <Check size={14} />}
-          </button>
-          <button
-            className="preset"
-            disabled={!effectiveMix.guitar}
-            onClick={() => {
-              const next = defaults(stems);
-              if (next.guitar) next.guitar.solo = true;
-              setMix((current) => ({ ...current, ...next }));
+          <div
+            className="preset-split"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget))
+                setPartMenuOpen(false);
             }}
           >
-            <Headphones size={16} /> Hear just the guitar
+            <button
+              className={`preset preset-primary ${playWithBandActive ? "selected" : ""}`}
+              onClick={() => setPerformanceShortcut("play-with-band")}
+              disabled={!preferredPartAvailable}
+            >
+              <PartIcon size={16} /> {presetCopy.primary}
+              {playWithBandActive && <Check size={14} />}
+            </button>
+            <button
+              className="preset preset-menu-toggle"
+              aria-label="Choose performance part"
+              aria-haspopup="menu"
+              aria-expanded={partMenuOpen}
+              disabled={!availableParts.length}
+              onClick={() => setPartMenuOpen((open) => !open)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setPartMenuOpen(false);
+              }}
+            >
+              <ChevronDown size={14} />
+            </button>
+            {partMenuOpen && (
+              <div className="preset-menu" role="menu">
+                {availableParts.map((part) => {
+                  const ChoiceIcon = icons[normalizedStemName(part)] ?? Music2;
+                  return (
+                    <button
+                      key={part}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={part === preferredPart}
+                      onClick={() => selectPerformancePart(part)}
+                    >
+                      <ChoiceIcon size={14} />
+                      <span>{partLabel(part)}</span>
+                      {part === preferredPart && <Check size={13} />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <button
+            className={`preset ${hearJustActive ? "selected" : ""}`}
+            disabled={!preferredPartAvailable}
+            onClick={() => setPerformanceShortcut("hear-just")}
+          >
+            <Headphones size={16} /> {presetCopy.secondary}
+            {hearJustActive && <Check size={14} />}
           </button>
         </div>
       )}
