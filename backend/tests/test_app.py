@@ -13,6 +13,8 @@ from riffroom.models import (
     COMMUNITY_MODELS,
     CURATED_MODELS,
     MODELS,
+    PORTABLE_CANDIDATE_VARIANTS,
+    PORTABLE_DRUMSEP_FILENAME,
     VALIDATED_PORTABLE_VARIANTS,
     community_model_id,
     community_profiles_from_metadata,
@@ -81,7 +83,15 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         "unverified",
     }
     for model in models:
-        assert model["supported_platforms"] == ["macos-arm64"]
+        windows_validated = model["id"] in {
+            "demucs-6",
+            "roformer-6",
+            "demucs-ft",
+            "roformer-vocals",
+        } or model["filename"] == PORTABLE_DRUMSEP_FILENAME
+        assert model["supported_platforms"] == (
+            ["macos-arm64", "windows-x86_64"] if windows_validated else ["macos-arm64"]
+        )
         platform_key = current_platform_key()
         platform_supported = platform_key in model["supported_platforms"]
         portable_only = model["provider_options"] == ["audio-separator"]
@@ -135,13 +145,13 @@ def test_portable_allowlist_routing_cleanup_and_runtime_compatibility(applicatio
         for model in portable_models
         for variant in model.variants
         if variant.provider_id == "audio-separator"
-    } == set(VALIDATED_PORTABLE_VARIANTS)
+    } == {*VALIDATED_PORTABLE_VARIANTS, *PORTABLE_CANDIDATE_VARIANTS}
     assert pilot.name == "MDX-Net Model: UVR-MDX-NET Inst HQ 5"
     assert pilot.stems == ("instrumental", "vocals")
     assert all(
         [variant.provider_id for variant in model.variants] == ["audio-separator"]
         and all(variant.validated for variant in model.variants)
-        and model.supported_platforms == ("macos-arm64",)
+        and "macos-arm64" in model.supported_platforms
         and model.cache_cleanup_supported is False
         for model in portable_only
     )
@@ -176,8 +186,13 @@ def test_portable_allowlist_routing_cleanup_and_runtime_compatibility(applicatio
     available = {item["id"]: item for item in client.get("/api/models").json()}
     for model in portable_models:
         row = available[model.id]
-        assert row["compatibility"]["compatible"] is row["compatibility"]["platform_supported"]
-        if row["compatibility"]["platform_supported"]:
+        portable_runs_on_macos = any(
+            variant.provider_id == "audio-separator"
+            and "macos-arm64" in (*variant.supported_platforms, *variant.experimental_platforms)
+            for variant in model.variants
+        )
+        assert row["compatibility"]["compatible"] is portable_runs_on_macos
+        if portable_runs_on_macos:
             assert row["provider"] == "audio-separator"
 
 

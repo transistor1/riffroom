@@ -10,7 +10,7 @@ FastAPI on 127.0.0.1:8765
                 └── cancellable Python subprocess
                         ├── logical model → ordered trusted execution variants
                         │       ├── production MLX inference for validated profiles
-                        │       └── managed audio-separator 0.47.0 venv → explicit 4-profile allowlist
+                        │       └── managed audio-separator 0.47.0 venv → explicit model allowlist
                         └── aligned float WAV stems + waveform peaks
 
 Browser Web Audio: shared AudioContext → one source/gain per stem
@@ -79,22 +79,24 @@ aligned stereo 44.1 kHz float WAV paths; the shared worker will validate them an
 manifest. Add its fixed ID to the trusted registry rather than loading a module from metadata. Do not let raw user
 input select arbitrary checkpoint files, paths, URLs, Python modules or executable code.
 
-Compatibility is capability-driven across a profile's validated variants, not inferred from an architecture name
+Compatibility is capability-driven across a profile's trusted variants, not inferred from an architecture name
 or a UI operating-system check. Existing production profiles keep their `mlx-audio-separator` Apple Silicon
-execution paths, and `demucs-6` now has a second, lower-priority `audio-separator` variant. The three
+execution paths, and every curated portable candidate keeps MLX first. The three
 portable-only community profiles are validated only through `audio-separator`; presence
-in MLX's bundled registry is not treated as runtime proof. The allowlist grows only after the fixed managed runtime
-successfully separates generated audio and produces every trusted expected stem as a readable WAV. The portable
-provider is available only when its administrator override, `PATH` command, or managed CLI resolves successfully.
+in MLX's bundled registry is not treated as runtime proof. Stable capability grows only after the fixed managed
+runtime successfully separates generated audio and produces every trusted expected stem as a readable WAV;
+experimental candidates additionally require exact filename/config evidence from audio-separator 0.47.0. The
+portable provider is available only when its administrator override, `PATH` command, or managed CLI resolves successfully.
 Until then each portable-only row remains visible in Model Manager as **Runtime required** (or
-**Experimental runtime required** on Windows x86-64), stays out of normal
+**Experimental runtime required** for a model-specific Windows validation candidate), stays out of normal
 selectors, and offers the portable installer. The user must explicitly
 start the large install; opening Model Manager never installs software. Windows and Linux venv layouts are handled
 by the installer. The explicit Demucs six-stem portable variant and three static portable community profiles are
-execution-validated on `macos-arm64` and explicitly experimental on `windows-x86_64`. A real Windows x86-64 CPU
-separation has now completed successfully, validating the portable execution path under that tested arrangement;
-this does not claim that every allowlisted profile or host configuration has been exercised. No arbitrary
-community model inherits that Windows capability, and Windows ARM64 and Linux remain unavailable.
+execution-validated on `macos-arm64`. On Windows x86-64, Demucs 6 and MDX23C DrumSep are supported after real
+CUDA separations; the other community pilots remain experimental. The exact `BS-Roformer-SW.ckpt`,
+`htdemucs_ft.yaml`, and `vocals_mel_band_roformer.ckpt` curated variants are also supported after live Windows
+CUDA runs. No arbitrary community model or architecture inherits that capability, and Windows ARM64 and Linux
+remain unavailable.
 
 The Phase 3D2 follow-up resolved the Demucs import blocker without a shim. `audio-separator` imports
 `DiffQuantizer`, `UniformQuantizer`, and `restore_quantized_state` at module load; the validated `htdemucs_6s`
@@ -103,10 +105,13 @@ checkpoint is not quantized, but the real `diffq` package is still required for 
 With `samplerate` still absent, `htdemucs_6s.yaml` then separated a generated six-second stereo WAV and produced
 exactly guitar, vocals, drums, bass, piano and other as readable stereo WAVs. The existing `demucs-6` logical
 model therefore keeps MLX first and adds `audio-separator` second, with the same model ID and trusted stems.
-`htdemucs_ft.yaml` remains MLX-only: its missing checkpoint again could not be downloaded because the worker
-could not resolve `dl.fbaipublicfiles.com`, so it did not reach inference. Stable portable profile capabilities
-remain declared for `macos-arm64`; `windows-x86_64` remains experimental despite its now-successful real CPU
-separation test, and other Windows/Linux hosts remain unavailable.
+`htdemucs_ft.yaml` initially did not reach inference because the worker could not resolve
+`dl.fbaipublicfiles.com` for its missing checkpoint. Audio-separator 0.47.0's discovery code and the cached UVR
+registry nevertheless recognized that exact Demucs v4 filename, so it was first exposed as an experimental
+Windows validation candidate. Later live Windows CUDA runs completed that model plus the exact registry-backed
+`BS-Roformer-SW.ckpt` and `vocals_mel_band_roformer.ckpt` variants end to end, promoting all three to supported
+Windows capability. The registry provides no exact entry for the curated guitar specialists, which remain
+MLX-only.
 
 The install endpoint accepts no package, version, executable, or provider input. Status exposes only a fixed
 user-facing phase label and the installation start timestamp while work is active; it never exposes argv, paths,
@@ -170,7 +175,7 @@ cleanup would be misleading and unsafe.
 The base project dependency set contains only the web/audio application requirements. The Apple inference stack is
 declared in the `mlx` optional dependency group with the same pinned MLX Audio Separator, Demucs, Torch and
 Torchaudio versions used by the tested installation. MLX package resources are optional at import time: without
-them the app, model catalog and explicit provider registry still import; the four curated profiles remain visible
+them the app, model catalog and explicit provider registry still import; the eight curated profiles remain visible
 but runtime-unavailable, and the community catalog contains the three static portable profiles.
 
 The Apple Silicon launcher continues to install the complete MLX stack from `requirements-lock.txt`.
@@ -207,13 +212,12 @@ access warning. Wildcard binds use a loopback browser/readiness URL; remote clie
 computer's LAN IP and port 8765. Only default launches reuse an existing server; explicit binds
 probe the requested socket and report conflicts rather than silently reusing a loopback server.
 
-Supported production model capabilities remain `macos-arm64`. The four explicit portable variants additionally
-declare `windows-x86_64` as experimental, allowing Model Manager installation and use when that runtime becomes
-available. A real Windows x86-64 CPU separation has completed successfully, so the portable path is functionally
-execution-validated under the tested arrangement; the experimental label reflects the still-narrow platform and
-profile coverage. CUDA has completed live Demucs 6 and MDX23C DrumSep separations on an NVIDIA GeForce RTX 4070
-Ti SUPER; audio-separator 0.47.0 has no CUDA CLI switch and automatically selects CUDA from
-`torch.cuda.is_available()`, otherwise using CPU. Windows ARM64,
+Windows x86-64 is supported with limited model availability. Demucs 6, Demucs detailed 4, RoFormer 6,
+RoFormer Kimberley vocals, and MDX23C DrumSep declare stable Windows capability after live runs, including CUDA
+separations on an NVIDIA GeForce RTX 4070 Ti SUPER. UVR-MDX-NET Inst HQ 5 and Mel-Roformer-Karaoke
+Aufr33-Viperx remain individually experimental until their exact filenames produce every trusted output stem in
+a real Windows run; this does not imply broad hardware or driver coverage. Audio-separator 0.47.0 has no CUDA
+CLI switch and automatically selects CUDA from `torch.cuda.is_available()`, otherwise using CPU. Windows ARM64,
 Linux and Intel macOS remain outside this capability. Launcher support alone does
 not certify inference support.
 

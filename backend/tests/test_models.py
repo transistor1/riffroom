@@ -12,6 +12,7 @@ from riffroom.models import (
     DEMUCS_6_FILENAME,
     MLX_PROVIDER,
     MODELS,
+    PORTABLE_CANDIDATE_VARIANTS,
     PORTABLE_COMMUNITY_MODELS,
     PORTABLE_DRUMSEP_FILENAME,
     PORTABLE_KARAOKE_FILENAME,
@@ -34,6 +35,7 @@ PORTABLE_FILENAMES = (
     PORTABLE_KARAOKE_FILENAME,
 )
 NEW_PORTABLE_FILENAMES = (PORTABLE_DRUMSEP_FILENAME, PORTABLE_KARAOKE_FILENAME)
+PORTABLE_CURATED_CANDIDATES = ("roformer-6", "demucs-ft", "roformer-vocals")
 
 
 def portable_model(filename=PORTABLE_PILOT_FILENAME):
@@ -56,6 +58,14 @@ def test_kimberley_vocals_is_a_trusted_curated_profile(tmp_path):
     assert (model.license, model.terms_status) == ("MIT", "open")
     assert model.variants == (
         ExecutionVariant(MLX_PROVIDER, "vocals_mel_band_roformer.ckpt", ("macos-arm64",), True),
+        ExecutionVariant(
+            PORTABLE_PROVIDER,
+            "vocals_mel_band_roformer.ckpt",
+            ("windows-x86_64",),
+            True,
+            (),
+            (("other", "instrumental"),),
+        ),
     )
     assert model.filename not in VALIDATED_PORTABLE_VARIANTS
     rows = [row for row in catalog(tmp_path, platform_key="macos-arm64") if row["id"] == model.id]
@@ -68,7 +78,8 @@ def test_kimberley_vocals_is_a_trusted_curated_profile(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "model_id", ["roformer-vocals", "mvsep-guitar", "mvsep-electric-guitar", "mvsep-acoustic-guitar"]
+    "model_id",
+    ["guitar-focus", "mvsep-guitar", "mvsep-electric-guitar", "mvsep-acoustic-guitar"],
 )
 @pytest.mark.parametrize(
     ("platform_key", "mlx_available", "compatible"),
@@ -192,17 +203,50 @@ def test_macos_stable_available_label_is_unchanged(tmp_path):
 
 def test_validated_portable_allowlist_is_explicit_and_portable_only():
     assert tuple(VALIDATED_PORTABLE_VARIANTS) == (DEMUCS_6_FILENAME, *PORTABLE_FILENAMES)
-    assert all(
-        variant
-        == ExecutionVariant(
+    assert VALIDATED_PORTABLE_VARIANTS[DEMUCS_6_FILENAME] == ExecutionVariant(
+        PORTABLE_PROVIDER,
+        DEMUCS_6_FILENAME,
+        ("macos-arm64", "windows-x86_64"),
+        True,
+    )
+    assert VALIDATED_PORTABLE_VARIANTS[PORTABLE_DRUMSEP_FILENAME] == ExecutionVariant(
+        PORTABLE_PROVIDER,
+        PORTABLE_DRUMSEP_FILENAME,
+        ("macos-arm64", "windows-x86_64"),
+        True,
+    )
+    for filename in (PORTABLE_PILOT_FILENAME, PORTABLE_KARAOKE_FILENAME):
+        assert VALIDATED_PORTABLE_VARIANTS[filename] == ExecutionVariant(
             PORTABLE_PROVIDER,
             filename,
             ("macos-arm64",),
             True,
             ("windows-x86_64",),
         )
-        for filename, variant in VALIDATED_PORTABLE_VARIANTS.items()
-    )
+
+
+def test_portable_curated_candidates_are_exact_and_keep_mlx_preferred():
+    expected = {
+        "roformer-6": "BS-Roformer-SW.ckpt",
+        "demucs-ft": "htdemucs_ft.yaml",
+        "roformer-vocals": "vocals_mel_band_roformer.ckpt",
+    }
+
+    assert set(PORTABLE_CANDIDATE_VARIANTS) == set(expected.values())
+    for model_id, filename in expected.items():
+        model = CURATED_MODELS[model_id]
+        assert model.variants[0] == ExecutionVariant(
+            MLX_PROVIDER, filename, ("macos-arm64",), True
+        )
+        assert model.variants[1] == PORTABLE_CANDIDATE_VARIANTS[filename]
+        assert (
+            resolve_model_variant(
+                model,
+                availability(**{MLX_PROVIDER: True, PORTABLE_PROVIDER: True}),
+                platform_key="macos-arm64",
+            )
+            == model.variants[0]
+        )
 
 
 def test_portable_profiles_have_stable_server_owned_metadata():
@@ -419,7 +463,10 @@ def test_unvalidated_experimental_variant_is_not_host_capable():
     )
 
 
-@pytest.mark.parametrize("model_id", [model_id for model_id in CURATED_MODELS if model_id != "demucs-6"])
+@pytest.mark.parametrize(
+    "model_id",
+    ("guitar-focus", "mvsep-guitar", "mvsep-electric-guitar", "mvsep-acoustic-guitar"),
+)
 def test_mlx_only_models_remain_unavailable_on_windows_x86(tmp_path, model_id):
     model = CURATED_MODELS[model_id]
     runtimes = {MLX_PROVIDER: True, PORTABLE_PROVIDER: True}
@@ -473,9 +520,12 @@ def test_new_portable_models_are_single_rows_and_runtime_required_without_provid
 
 @pytest.mark.parametrize(
     "model_id",
-    ("demucs-6", *(community_model_id(filename) for filename in PORTABLE_FILENAMES)),
+    (
+        community_model_id(PORTABLE_PILOT_FILENAME),
+        community_model_id(PORTABLE_KARAOKE_FILENAME),
+    ),
 )
-def test_windows_x86_portable_models_are_experimental_and_installable(tmp_path, model_id):
+def test_windows_x86_experimental_models_are_installable(tmp_path, model_id):
     model = MODELS[model_id]
     row = next(
         item
@@ -504,9 +554,63 @@ def test_windows_x86_portable_models_are_experimental_and_installable(tmp_path, 
 
 @pytest.mark.parametrize(
     "model_id",
-    ("demucs-6", *(community_model_id(filename) for filename in PORTABLE_FILENAMES)),
+    (
+        "demucs-6",
+        "roformer-6",
+        "demucs-ft",
+        "roformer-vocals",
+        community_model_id(PORTABLE_DRUMSEP_FILENAME),
+    ),
 )
-def test_windows_x86_portable_models_resolve_when_runtime_is_available(tmp_path, model_id):
+def test_windows_x86_validated_models_are_supported(tmp_path, model_id):
+    model = MODELS[model_id]
+    without_runtime = next(
+        item
+        for item in catalog(
+            tmp_path,
+            provider_availability={MLX_PROVIDER: False, PORTABLE_PROVIDER: False},
+            platform_key="windows-x86_64",
+        )
+        if item["id"] == model_id
+    )
+    runtimes = {MLX_PROVIDER: False, PORTABLE_PROVIDER: True}
+    selected = resolve_model_variant(
+        model,
+        availability(**runtimes),
+        platform_key="windows-x86_64",
+    )
+    with_runtime = next(
+        item
+        for item in catalog(tmp_path, provider_availability=runtimes, platform_key="windows-x86_64")
+        if item["id"] == model_id
+    )
+
+    assert without_runtime["supported_platforms"] == ["macos-arm64", "windows-x86_64"]
+    assert without_runtime["compatibility"] == {
+        "platform_key": "windows-x86_64",
+        "platform_name": "Windows (x86-64)",
+        "platform_supported": True,
+        "experimental": False,
+        "runtime_available": False,
+        "compatible": False,
+        "label": "Runtime required · Windows (x86-64)",
+    }
+    assert selected is not None
+    assert selected.provider_id == PORTABLE_PROVIDER
+    assert with_runtime["provider"] == PORTABLE_PROVIDER
+    assert with_runtime["compatibility"]["compatible"] is True
+    assert with_runtime["compatibility"]["experimental"] is False
+    assert with_runtime["compatibility"]["label"] == "Compatible · Windows (x86-64)"
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    (
+        community_model_id(PORTABLE_PILOT_FILENAME),
+        community_model_id(PORTABLE_KARAOKE_FILENAME),
+    ),
+)
+def test_windows_x86_experimental_models_resolve_when_runtime_is_available(tmp_path, model_id):
     model = MODELS[model_id]
     runtimes = {MLX_PROVIDER: False, PORTABLE_PROVIDER: True}
     selected = resolve_model_variant(
@@ -531,7 +635,11 @@ def test_windows_x86_portable_models_resolve_when_runtime_is_available(tmp_path,
 @pytest.mark.parametrize("platform_key", ["windows-arm64", "linux-x86_64", "linux-arm64"])
 @pytest.mark.parametrize(
     "model_id",
-    ("demucs-6", *(community_model_id(filename) for filename in PORTABLE_FILENAMES)),
+    (
+        "demucs-6",
+        *PORTABLE_CURATED_CANDIDATES,
+        *(community_model_id(filename) for filename in PORTABLE_FILENAMES),
+    ),
 )
 def test_portable_models_remain_unavailable_on_other_hosts(tmp_path, platform_key, model_id):
     model = MODELS[model_id]

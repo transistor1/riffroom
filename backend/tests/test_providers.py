@@ -170,6 +170,49 @@ def test_audio_separator_cli_contract_and_normalized_outputs(tmp_path):
     assert (output / "guitar.wav").is_file()
 
 
+def test_audio_separator_uses_kimberley_other_alias_for_logical_instrumental(tmp_path):
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output"
+    cache = tmp_path / "cache"
+    source.touch()
+    output.mkdir()
+    cache.mkdir()
+    profile = CURATED_MODELS["roformer-vocals"]
+    variant = profile.variants[1]
+    captured = {}
+
+    def fake_runner(argv, **kwargs):
+        captured["names"] = json.loads(argv[argv.index("--custom_output_names") + 1])
+        (output / "vocals.wav").touch()
+        # Normalize the exact trusted alias too, in case the upstream runtime returns
+        # its source stem name despite receiving a custom logical output name.
+        (output / "OTHER.wav").touch()
+        (output / "original_(other)_unrelated.wav").touch()
+        return SimpleNamespace(returncode=0, stdout=None, stderr=None)
+
+    provider = AudioSeparatorCliProvider(
+        environ={},
+        executable_resolver=lambda name: "/managed/audio-separator",
+        runner=fake_runner,
+    )
+    paths = provider.separate(
+        profile,
+        variant,
+        source,
+        output,
+        cache,
+        on_model_loaded=lambda: None,
+    )
+
+    assert captured["names"] == {"other": "instrumental", "vocals": "vocals"}
+    assert paths == {
+        "vocals": output / "vocals.wav",
+        "instrumental": output / "instrumental.wav",
+    }
+    assert (output / "instrumental.wav").is_file()
+    assert (output / "original_(other)_unrelated.wav").is_file()
+
+
 def test_audio_separator_nonzero_exit_has_bounded_actionable_error(tmp_path):
     provider = AudioSeparatorCliProvider(
         environ={},

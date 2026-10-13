@@ -110,8 +110,9 @@ in the project-local `.env`; Riffroom does not merge or manage the environments.
 `--check`/`-Check` return nonzero for missing/incompatible prerequisites and report a missing or
 stale build/stamp as "setup required" without making changes.
 
-Linux remains **not live validated**. Windows x86-64 has user-reported real-host validation: the user
-reached the HTTPS LAN site, successfully uploaded audio, and later completed a real portable CPU separation.
+Linux remains **not live validated**. Windows x86-64 has user-reported real-host validation: the core app and
+HTTPS LAN launcher started, browser use and upload succeeded through SSH forwarding, and a real portable CPU
+separation completed.
 The successful separation session used Node.js and FFmpeg from an activated Conda environment while the
 application's Python packages remained in Riffroom's project-local `.env`. This validates a functional Windows
 x86-64 CPU separation path, not every allowlisted model or host configuration. Continue native-host testing for:
@@ -119,10 +120,11 @@ Python 3.11/3.12/3.13 installation and package wheel availability; paths with sp
 missing-tool diagnostics and read-only check mode; clean setup and repeat launch;
 browser opening, existing-server reuse, occupied port errors and Ctrl-C shutdown;
 PowerShell wrapper forwarding; clean managed-runtime installation; and the remaining allowlisted model variants.
-The supported production capabilities remain on macOS ARM64. Windows x86-64 exposes only four explicit portable
-variants as experimental, with the portable CPU path now functionally validated by a real successful separation.
-Windows ARM64 and Linux remain unavailable. PowerShell parsing/check execution on macOS and mocked platform tests
-are not substitutes for Windows execution evidence.
+Windows x86-64 is supported with limited model availability. Demucs 6, Demucs detailed 4, RoFormer 6, Kimberley
+vocals, and MDX23C DrumSep have exact live Windows execution evidence; two other allowlisted filenames remain
+individually experimental. This is not broad hardware, driver, or clean-host coverage. Windows ARM64 and Linux
+remain unavailable. PowerShell parsing/check
+execution on macOS and mocked platform tests are not substitutes for Windows execution evidence.
 
 MVP validation on the development Mac (2026-09-25):
 
@@ -158,8 +160,9 @@ does not provide a secure context. Default startup remains 127.0.0.1. Remote cli
 server's LAN IP and port 8765; there is no authentication, so use only a trusted LAN.
 
 User-reported Windows x86-64 result: direct
-`.\.env\Scripts\python.exe .\scripts\launch.py --lan` startup served HTTPS over the LAN and an
-audio upload succeeded. A later real Windows test also completed a portable CPU separation successfully.
+`.\.env\Scripts\python.exe .\scripts\launch.py --lan` startup successfully started the HTTPS launcher. Direct
+browser access remained blocked by the host/network firewall arrangement, so browser validation and audio upload
+were completed through SSH forwarding. A later real Windows test also completed a portable CPU separation successfully.
 During that successful separation, an activated Conda environment kept Node.js and FFmpeg on PATH while
 Riffroom continued to use its own project-local `.env` for application Python packages. This validates the
 functional inference path, but not every allowlisted model, clean-host combination, or PowerShell wrapper path.
@@ -186,10 +189,11 @@ Worker validation:
 
 The initial IPv6 tests encountered the installed Starlette TestClient's IPv6 URL parser
 limitation; explicit Host headers exercise the middleware successfully. No live LAN or
-fresh Windows/Linux host test was performed by that worker. The later user-reported Windows HTTPS LAN/upload and
-successful CPU separation results above supersede those earlier Windows limitations; Linux live validation remains pending.
+fresh Windows/Linux host test was performed by that worker. The later user-reported Windows HTTPS launcher,
+SSH-forwarded browser/upload, and successful CPU separation results above supersede those earlier Windows
+limitations; Linux live validation remains pending.
 
-## Optional Windows CUDA runtime · 2026-10-11 / live follow-up 2026-10-12
+## Optional Windows CUDA runtime · 2026-10-11 / live follow-up 2026-10-13
 
 Windows x86-64 managed installs now use the fixed `audio-separator[gpu]==0.47.0`,
 `torch==2.8.0+cu128`, `torchvision==0.23.0+cu128`, `torchaudio==2.8.0+cu128`, and
@@ -215,19 +219,33 @@ Model Manager reports `NVIDIA GeForce RTX 4070 Ti SUPER · CUDA`. Demucs 6 separ
 dramatically faster than CPU. MDX23C DrumSep also completed on CUDA while `nvidia-smi` showed sustained 74–81%
 GPU utilization, about 2.1–2.2 GB VRAM, and about 200 W. Cancellation during separation also succeeded.
 
+Further live runs on that same Windows CUDA host completed `BS-Roformer-SW.ckpt` end to end with all six logical
+stems; observed load was about 3.0 GB VRAM, frequently 100% GPU utilization, and roughly 240–259 W. The
+`htdemucs_ft.yaml` detailed four-stem model also completed end to end, using about 1.96 GB VRAM, mostly 75–87% GPU
+utilization, and roughly 150–165 W. These observations are valid execution evidence, not failure symptoms, so both
+exact variants are now supported on Windows x86-64.
+
+The first `vocals_mel_band_roformer.ckpt` run completed upstream inference, producing `vocals.wav` plus
+`original_(other)_vocals_mel_band_roformer.wav`, but Riffroom post-validation still expected `instrumental.wav`.
+The portable variant now explicitly maps the trusted upstream `other` stem to the logical `instrumental` stem. A
+live rerun after that fix completed successfully end to end on the same Windows CUDA host, validating this exact
+variant. The GPU trace reached about 4.2 GB VRAM, utilization was mostly 83–100% and often 100%, and power was
+roughly 249–264 W during the main inference window.
+
 Current worker validation on macOS did not install packages or download models:
 
-- Focused runtime/provider/API tests: 96 passed, with two existing deprecation warnings.
-- `.env/bin/ruff check backend scripts`: passed.
-- `npm run build --prefix frontend`: passed.
+- Focused model/provider/API tests: 152 passed, with two existing deprecation warnings.
+- `.env/bin/ruff check backend`: passed.
 - `git diff --check`: passed.
 
 Remaining native Windows x86-64 checks after recipe 5:
 
 1. On a clean supported Python 3.11, 3.12, and 3.13 host, reinstall the managed runtime and confirm
    the fixed CUDA wheels resolve without a CUDA Toolkit or developer tools.
-2. Extend the successful NVIDIA coverage beyond Demucs 6 and MDX23C DrumSep to the remaining allowlisted
-   portable profiles while confirming readable/aligned output stems.
+2. Run each still-experimental exact filename on Windows CUDA and confirm the CLI exits successfully plus every
+   expected stem is readable and aligned: `UVR-MDX-NET-Inst_HQ_5.onnx`
+   (instrumental/vocals) and `mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt`
+   (vocals/instrumental). Promote only each filename that passes; registry or architecture matches are insufficient.
 3. On a Windows x86-64 host without a compatible NVIDIA device/driver, verify status reports CPU and
    repeat the existing real CPU separation to confirm fallback behavior.
 4. Recheck paths with spaces, install cancellation/shutdown, failed replacement recovery, repeat launch,
@@ -240,6 +258,9 @@ active. Model Manager polls that status every second and displays the phase with
 commands, paths, logs, or fabricated percentages. Deleting the selected separation result now synchronously
 switches the mixer to the server-equivalent fallback and aborts the old audio loads before issuing the DELETE;
 deleting the last result switches to Original mix.
+
+Live Windows follow-up also confirmed cancellation during a CUDA separation and the run-deletion/take-numbering
+fixes.
 
 Worker validation did not install packages, download models, or change CUDA drivers:
 

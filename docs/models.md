@@ -31,7 +31,7 @@ with checkpoint terms unverified. Electric/acoustic describe instrument classes,
 The two additions have catalog, download-contract and output-naming test coverage; the actual Mac GPU
 validation described above applies to the general guitar model.
 
-**Vocal specialist: Kimberley Jensen's Mel-Band RoFormer (`vocals_mel_band_roformer.ckpt`).** The curated `roformer-vocals` profile adds vocals/instrumental separation for vocal practice and accompaniment, with MIT-licensed weights. It uses the upstream registry entry “Roformer Model: MelBand Roformer | Vocals by Kimberley Jensen” and `vocals_mel_band_roformer.yaml`. Its validated support is currently MLX on `macos-arm64` only; portable support requires separate execution validation. [Author's model](https://huggingface.co/KimberleyJSN/melbandroformer).
+**Vocal specialist: Kimberley Jensen's Mel-Band RoFormer (`vocals_mel_band_roformer.ckpt`).** The curated `roformer-vocals` profile adds vocals/instrumental separation for vocal practice and accompaniment, with MIT-licensed weights. It uses the upstream registry entry “Roformer Model: MelBand Roformer | Vocals by Kimberley Jensen” and `vocals_mel_band_roformer.yaml`. MLX is validated on `macos-arm64`, and the exact audio-separator 0.47.0 variant is validated on Windows x86-64. [Author's model](https://huggingface.co/KimberleyJSN/melbandroformer).
 
 ## Provider-aware catalog
 
@@ -65,25 +65,45 @@ filename, path, URL, Python module or other user-supplied loading instruction is
 precedence if a generated catalog entry ever collides.
 
 All profiles support `macos-arm64`. A logical profile owns its model ID and user-facing metadata once, plus an
-ordered tuple of explicitly validated execution variants. Most curated profiles have one `mlx-audio-separator`
-variant; `demucs-6` has MLX first and a validated portable variant second. Portable routing is a server-owned
-allowlist, not a consequence of appearing in either runtime's
-registry. The `audio-separator` 0.47.0 allowlist contains exactly these execution-validated filenames:
+ordered tuple of explicitly reviewed execution variants. Every curated portable candidate retains
+`mlx-audio-separator` first, so Apple Silicon continues to prefer MLX. Portable routing is a server-owned
+allowlist, not a consequence of architecture support. The execution-validated portion of the
+`audio-separator` 0.47.0 allowlist contains these filenames:
 
 - `htdemucs_6s.yaml`: Guitar, Vocals, Drums, Bass, Piano and Other; a second variant on curated `demucs-6`.
+- `htdemucs_ft.yaml`: Vocals, Drums, Bass and Other; a second variant on curated `demucs-ft`.
+- `BS-Roformer-SW.ckpt`: Guitar, Vocals, Drums, Bass, Piano and Other; a second variant on curated `roformer-6`.
+- `vocals_mel_band_roformer.ckpt`: Vocals and Instrumental; a second variant on curated `roformer-vocals`.
 - `UVR-MDX-NET-Inst_HQ_5.onnx`: Instrumental and Vocals.
 - `MDX23C-DrumSep-aufr33-jarredou.ckpt`: Kick, Snare, Toms, HH, Ride and Crash.
 - `mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt`: Vocals and Instrumental.
+
+Windows x86-64 live execution is narrower: `htdemucs_6s.yaml`, `htdemucs_ft.yaml`,
+`BS-Roformer-SW.ckpt`, `vocals_mel_band_roformer.ckpt`, and
+`MDX23C-DrumSep-aufr33-jarredou.ckpt` are supported there after successful CUDA runs.
+The MDX-Net and karaoke community pilots remain experimental on Windows because they have not completed a real
+Windows run.
+
+The first Windows CUDA run of `vocals_mel_band_roformer.ckpt` exposed an output-name mismatch: the runtime called
+the backing stem `other` while the logical Riffroom profile calls it `instrumental`. The portable variant carries
+an explicit trusted `other` to `instrumental` output alias. A live rerun after that fix completed successfully end
+to end with readable, aligned logical outputs, validating this exact Windows variant.
+
+`becruily_guitar.ckpt` and the three `bs_mega_53stem_*_mvsep.ckpt` specialists occur in neither the bundled
+audio-separator registry nor the cached UVR registry. They remain MLX-only; architecture support by itself is not
+evidence that those exact checkpoint/config pairs are downloadable or runnable.
 
 The Phase 3D2 follow-up tested both curated Demucs candidates with a generated six-second stereo WAV on Apple
 Silicon. `audio-separator` imports DiffQ symbols while loading its Demucs modules even though the unquantized
 `htdemucs_6s` checkpoint does not exercise the quantized-state branches. The real `diffq 0.2.4` package built and
 imported after Torch when the build selected the installed Command Line Tools; no compatibility shim is used.
 `htdemucs_6s.yaml` then exited successfully and produced exactly its six trusted stems as readable 44.1 kHz
-stereo WAVs. Its existing curated `demucs-6` row now has MLX first/preferred and `audio-separator` second, without
+stereo WAVs. Its existing curated `demucs-6` row has MLX first/preferred and `audio-separator` second, without
 changing its logical ID, metadata, trusted stems, or prepared-file ownership. The `htdemucs_ft` attempt again
-could not resolve `dl.fbaipublicfiles.com` to download its missing checkpoint, so it remains unvalidated and
-MLX-only. Portable support remains declared `macos-arm64` only until Windows and Linux are tested independently.
+could not resolve `dl.fbaipublicfiles.com` to download its missing checkpoint, so at that point it remained an
+experimental Windows validation candidate rather than an execution-validated portable model. A later Windows
+CUDA run obtained the model and completed end to end, superseding that earlier download-bound result for Windows
+support.
 
 Each of the three community entries remains one logical catalog row with its existing generated model ID and has
 only a validated `audio-separator` variant. Its checkpoint terms remain unverified. The two additions were run
@@ -146,12 +166,13 @@ library removed `audioop` used by pydub. Older recipe and version-only markers a
 explicit reinstallation on Windows x86-64; unchanged hosts retain recipe 3. Import verification failures
 preserve the previous managed runtime.
 
-Catalog compatibility separates host capability from runtime readiness and computes both across validated
-variants only. On Apple Silicon and Windows x86-64 each allowlisted model selects `audio-separator` when the portable runtime is ready. Otherwise
-its row stays browsable as **Runtime required**, normal selectors exclude it, and
+Catalog compatibility separates host capability from runtime readiness and computes both across trusted
+variants only. Apple Silicon prefers a compatible MLX variant before considering the portable provider. On
+Windows x86-64 each allowlisted portable model selects `audio-separator` when the runtime is ready. Otherwise
+its row stays browsable as **Runtime required** (or **Experimental runtime required** for a validation candidate), normal selectors exclude it, and
 Model Manager offers the explicit portable installer. Installation is never triggered by page load, opening Model
-Manager, or selecting a tab. Windows x86-64 is explicitly experimental; Windows ARM64 and Linux execution remain
-unavailable.
+Manager, or selecting a tab. Windows x86-64 is supported with limited model availability; experimental labels are
+model-specific. Windows ARM64 and Linux execution remain unavailable.
 
 The CUDA versions follow the official [PyTorch 2.8 wheel matrix](https://pytorch.org/get-started/previous-versions/)
 and [ONNX Runtime CUDA/PyTorch compatibility guidance](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).
@@ -167,9 +188,8 @@ is missing. [Runtime source](https://github.com/ssmall256/mlx-audio-separator).
 
 The original Demucs Python package is pinned to 4.0.1 with Torch/Torchaudio 2.8.0 for compatibility with the tested conversion path. Inference uses MLX, rather than PyTorch's MPS implementation.
 
-This dependency split does not yet broaden supported platforms: all declared model variants remain
-`macos-arm64`. The existing setup script still installs the full Apple stack from `requirements-lock.txt`; that
-lock and the launch scripts are intentionally unchanged until the later cross-platform setup phase.
+This dependency split preserves the Apple Silicon MLX preference even where a curated model also has a portable
+Windows candidate. The existing setup script still installs the full Apple stack from `requirements-lock.txt`.
 
 ## Lead/rhythm guitar
 

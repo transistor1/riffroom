@@ -4,7 +4,7 @@
 
 I built Riffroom for my own guitar practice and am sharing it in case you'd like to play with it too. Open a song, split it into instruments, then turn the guitar down or off and play along—or solo it to hear the part you're learning. Loop a tricky passage, slow it down without detuning, or transpose it to match your guitar. It all runs locally, with a mixer in your browser.
 
-**Apple Silicon Mac is the supported song-splitting path today.** Linux remains a core-app experiment. Windows x86-64 also offers a narrowly allowlisted portable separator as an explicit experiment. Both its CPU fallback and optional NVIDIA CUDA acceleration have completed real Windows separation tests.
+**Apple Silicon Mac and Windows x86-64 are supported song-splitting paths.** Windows has limited model availability and validation covers a specific CPU setup plus an NVIDIA GeForce RTX 4070 Ti SUPER, not every hardware or driver combination. Linux remains an unvalidated core-app experiment.
 
 ## A quick look
 
@@ -70,7 +70,7 @@ bash start.sh
 
 Linux uses `scripts/setup_portable.py` and `requirements-core-lock.txt` to prepare the core app without installing MLX. It reports missing system tools rather than installing them for you.
 
-### Windows · experimental
+### Windows x86-64 · supported with limited model availability
 
 Install Python 3.11–3.13 with the Python launcher or PATH option, Node.js 22+ with npm, and FFmpeg with both `ffmpeg.exe` and `ffprobe.exe` on PATH. If you already use Conda, it is an optional convenient source for Node.js/npm and FFmpeg/ffprobe; Conda is not required, and Riffroom does not create or manage a Conda environment. Open or reopen PowerShell, navigate to the project folder, and run:
 
@@ -82,7 +82,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1
 
 If Node.js or FFmpeg comes from an activated Conda environment, that environment may need to remain activated while Riffroom runs so those executables stay on PATH. This is the arrangement used by the successful Windows separation test: Conda supplied host tools while Riffroom's Python packages remained in the project-local `.env` virtual environment. Riffroom still runs its application Python from `.env`; it does not combine the two environments into one or manage the Conda environment.
 
-The HTTPS LAN launcher, upload flow, portable CPU fallback, and CUDA-accelerated separation have been user-confirmed on Windows x86-64. Windows separation remains a narrowly allowlisted experiment rather than a broadly supported platform. Model Manager can install the portable engine for Demucs six stems and three allowlisted community pilots; the source launcher does not install it. On Windows x86-64 that managed engine includes fixed CUDA-enabled PyTorch and ONNX Runtime wheels. It uses an NVIDIA GPU when PyTorch confirms CUDA is available and otherwise keeps the validated CPU fallback. Neither the CUDA Toolkit nor developer tools are required. During installation, Model Manager reports the current safe phase and elapsed time; afterward it reports the detected GPU/backend. Linux splitting remains unavailable and unvalidated. See [validation notes](docs/validation.md#cross-platform-source-launcher-mvp) for the remaining checks.
+The core app, upload flow, portable CPU separation, and CUDA-accelerated separation have been user-confirmed on Windows x86-64. Demucs 6, Demucs detailed 4, RoFormer 6, RoFormer · Kimberley vocals, and MDX23C DrumSep have completed real Windows runs; other visible portable choices are explicitly marked experimental until each exact model completes end-to-end validation there. Model Manager installs the portable engine on request; the source launcher does not install it. The managed engine includes fixed CUDA-enabled PyTorch and ONNX Runtime wheels. It uses an NVIDIA GPU when PyTorch confirms CUDA is available and otherwise keeps the validated CPU fallback. Neither the CUDA Toolkit nor developer tools are required. During installation, Model Manager reports the current safe phase and elapsed time; afterward it reports the detected GPU/backend. This evidence does not claim broad GPU, driver, or model coverage. Linux splitting remains unavailable and unvalidated. See [validation notes](docs/validation.md#cross-platform-source-launcher-mvp) for the remaining checks.
 
 ### Setup checks and limits
 
@@ -125,12 +125,13 @@ it cannot be combined with a non-default `-BindAddress`. Using
 `-BindAddress 0.0.0.0` directly remains available for plain HTTP testing, but remote
 AudioWorklet playback requires a secure context and is therefore unsuitable in that mode.
 Riffroom has no authentication: anyone who can reach the bound interface can access
-the app and data. Use only on a trusted LAN. A user successfully started HTTPS LAN
-mode, uploaded audio, and completed a portable CPU separation on Windows x86-64.
+the app and data. Use only on a trusted LAN. The HTTPS LAN launcher starts on the validated
+Windows x86-64 host, but browser use was completed through SSH forwarding because direct LAN
+access was blocked by the host/network firewall arrangement.
 
 ## Choosing a splitting method
 
-These curated choices are available through the Apple Silicon setup. On Windows x86-64, the narrowly allowlisted portable path is still experimental. Its CPU fallback and optional NVIDIA CUDA acceleration have both completed real successful separation tests. Use Model Manager to explore other entries and manage the models in your selection menus; availability depends on your platform and installed tools.
+These curated choices are available through the Apple Silicon setup. Windows x86-64 has a smaller validated curated catalog: Demucs 6, Demucs detailed 4, RoFormer 6, and RoFormer · Kimberley vocals. The community MDX23C DrumSep entry is also validated there; UVR-MDX-NET Inst HQ 5 and Mel-Roformer-Karaoke Aufr33-Viperx remain experimental until each exact model completes a real Windows run end to end. CPU fallback and optional NVIDIA CUDA acceleration have both completed real separations. Use Model Manager to explore entries and manage the models in your selection menus; availability depends on your platform and installed tools.
 
 | Model | Outputs | When to use it |
 |---|---|---|
@@ -198,4 +199,4 @@ The browser test imports an original synthetic fixture, runs the real default ML
 - **Port 8765 in use:** the launcher reuses Riffroom if it owns the port; otherwise it asks you to stop the other app.
 - **SDK build error:** make sure `xcrun --sdk macosx --show-sdk-path` resolves to an SDK compatible with the selected Xcode toolchain. Setup already includes the workaround used on this Mac.
 - **Shared Homebrew on a multi-user Mac:** setup can use compatible tools that are already installed, including an unlinked supported Python. If another account owns Homebrew and a tool is missing, use that account or ask an administrator to install the tool.
-- **No splitting options on Linux:** Linux model execution remains unavailable and unvalidated. On Windows x86-64, Model Manager can install the experimental portable runtime for only the explicitly allowlisted models. It prefers NVIDIA CUDA when detected and falls back to CPU; a real CPU separation has completed successfully there.
+- **No splitting options on Linux:** Linux model execution remains unavailable and unvalidated. On Windows x86-64, Model Manager can install the portable runtime for only explicitly allowlisted models. It prefers NVIDIA CUDA when detected and falls back to CPU; both paths have completed real separations under the tested configurations.

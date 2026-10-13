@@ -24,6 +24,7 @@ class ExecutionVariant:
     supported_platforms: tuple[str, ...]
     validated: bool
     experimental_platforms: tuple[str, ...] = ()
+    output_aliases: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -89,14 +90,44 @@ def _mlx_variant(filename: str) -> ExecutionVariant:
     return ExecutionVariant(MLX_PROVIDER, filename, ("macos-arm64",), True)
 
 
-def _portable_variant(filename: str) -> ExecutionVariant:
+def _portable_variant(filename: str, *, windows_validated: bool = False) -> ExecutionVariant:
     return ExecutionVariant(
         PORTABLE_PROVIDER,
         filename,
-        ("macos-arm64",),
+        ("macos-arm64", "windows-x86_64") if windows_validated else ("macos-arm64",),
         True,
-        ("windows-x86_64",),
+        () if windows_validated else ("windows-x86_64",),
     )
+
+
+def _portable_windows_variant(
+    filename: str,
+    *,
+    windows_validated: bool = False,
+    output_aliases: tuple[tuple[str, str], ...] = (),
+) -> ExecutionVariant:
+    """Allow one exact registry-backed filename on Windows with trusted output aliases."""
+    return ExecutionVariant(
+        PORTABLE_PROVIDER,
+        filename,
+        ("windows-x86_64",) if windows_validated else (),
+        True,
+        () if windows_validated else ("windows-x86_64",),
+        output_aliases,
+    )
+
+
+PORTABLE_CANDIDATE_VARIANTS = {
+    "BS-Roformer-SW.ckpt": _portable_windows_variant(
+        "BS-Roformer-SW.ckpt", windows_validated=True
+    ),
+    "htdemucs_ft.yaml": _portable_windows_variant("htdemucs_ft.yaml", windows_validated=True),
+    "vocals_mel_band_roformer.ckpt": _portable_windows_variant(
+        "vocals_mel_band_roformer.ckpt",
+        windows_validated=True,
+        output_aliases=(("other", "instrumental"),),
+    ),
+}
 
 
 CURATED_MODELS = {
@@ -114,7 +145,7 @@ CURATED_MODELS = {
             "open",
             (
                 _mlx_variant(DEMUCS_6_FILENAME),
-                _portable_variant(DEMUCS_6_FILENAME),
+                _portable_variant(DEMUCS_6_FILENAME, windows_validated=True),
             ),
             (
                 DEMUCS_6_FILENAME,
@@ -133,7 +164,10 @@ CURATED_MODELS = {
             "https://github.com/ssmall256/mlx-audio-separator",
             "RoFormer",
             "unverified",
-            (_mlx_variant("BS-Roformer-SW.ckpt"),),
+            (
+                _mlx_variant("BS-Roformer-SW.ckpt"),
+                PORTABLE_CANDIDATE_VARIANTS["BS-Roformer-SW.ckpt"],
+            ),
             ("BS-Roformer-SW.ckpt", "BS-Roformer-SW.yaml"),
         ),
         ModelProfile(
@@ -201,7 +235,10 @@ CURATED_MODELS = {
             "https://github.com/facebookresearch/demucs",
             "Demucs",
             "open",
-            (_mlx_variant("htdemucs_ft.yaml"),),
+            (
+                _mlx_variant("htdemucs_ft.yaml"),
+                PORTABLE_CANDIDATE_VARIANTS["htdemucs_ft.yaml"],
+            ),
             (
                 "htdemucs_ft.yaml",
                 "f7e0c4bc-ba3fe64a.th",
@@ -222,7 +259,10 @@ CURATED_MODELS = {
             "https://huggingface.co/KimberleyJSN/melbandroformer",
             "RoFormer",
             "open",
-            (_mlx_variant("vocals_mel_band_roformer.ckpt"),),
+            (
+                _mlx_variant("vocals_mel_band_roformer.ckpt"),
+                PORTABLE_CANDIDATE_VARIANTS["vocals_mel_band_roformer.ckpt"],
+            ),
             ("vocals_mel_band_roformer.ckpt", "vocals_mel_band_roformer.yaml"),
         ),
     )
@@ -236,17 +276,14 @@ PORTABLE_KARAOKE_FILENAME = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956
 PORTABLE_RUNTIME_SOURCE = "https://github.com/nomadkaraoke/python-audio-separator"
 PORTABLE_VALIDATION_ORIGIN = (
     "audio-separator 0.47.0 execution-validated on macos-arm64 (Apple Silicon); "
-    "experimental on Windows x86-64; "
+    "Windows x86-64 capability is filename-specific; "
     "Riffroom-trusted metadata copied from mlx-audio-separator 0.1.7"
 )
 VALIDATED_PORTABLE_VARIANTS = {
-    filename: _portable_variant(filename)
-    for filename in (
-        DEMUCS_6_FILENAME,
-        PORTABLE_PILOT_FILENAME,
-        PORTABLE_DRUMSEP_FILENAME,
-        PORTABLE_KARAOKE_FILENAME,
-    )
+    DEMUCS_6_FILENAME: _portable_variant(DEMUCS_6_FILENAME, windows_validated=True),
+    PORTABLE_PILOT_FILENAME: _portable_variant(PORTABLE_PILOT_FILENAME),
+    PORTABLE_DRUMSEP_FILENAME: _portable_variant(PORTABLE_DRUMSEP_FILENAME, windows_validated=True),
+    PORTABLE_KARAOKE_FILENAME: _portable_variant(PORTABLE_KARAOKE_FILENAME),
 }
 COMMUNITY_ARCHITECTURES = {
     "vr_download_list": "VR",
@@ -276,14 +313,20 @@ def _portable_community_profile(
     architecture: str,
 ) -> ModelProfile:
     """Build one server-owned portable profile independent of optional MLX metadata."""
+    windows_validated = filename == PORTABLE_DRUMSEP_FILENAME
     return ModelProfile(
         id=community_model_id(filename),
         name=name,
         stems=stems,
         description=(
             "Execution-validated through the portable audio-separator 0.47.0 runtime on Apple "
-            "Silicon; Windows x86-64 support is experimental. "
-            "Review its results and checkpoint terms before relying on it."
+            "Silicon; "
+            + (
+                "also execution-validated on Windows x86-64. "
+                if windows_validated
+                else "Windows x86-64 execution remains experimental. "
+            )
+            + "Review its results and checkpoint terms before relying on it."
         ),
         badge="Community",
         license="Checkpoint terms unverified; the runtime code license does not cover these weights.",
@@ -407,8 +450,13 @@ def community_profiles_from_metadata(
                 stems=candidate["stems"],
                 description=(
                     "Execution-validated through the portable audio-separator 0.47.0 runtime on "
-                    "Apple Silicon; Windows x86-64 support is experimental. "
-                    "Review its results and checkpoint terms before relying on it."
+                    "Apple Silicon; "
+                    + (
+                        "also execution-validated on Windows x86-64. "
+                        if candidate["filename"] == PORTABLE_DRUMSEP_FILENAME
+                        else "Windows x86-64 execution remains experimental. "
+                    )
+                    + "Review its results and checkpoint terms before relying on it."
                     if portable_variant
                     else "A trusted community checkpoint exposed by the pinned local runtime. "
                     "Review its results and checkpoint terms before relying on it."
