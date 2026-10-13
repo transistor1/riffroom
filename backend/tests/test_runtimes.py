@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -6,15 +7,27 @@ import pytest
 from riffroom.runtimes import (
     _AUDIO_SEPARATOR_IMPORT_CHECK,
     _MANAGED_MARKER,
+    _WINDOWS_CUDA_BUILD_CHECK,
+    _WINDOWS_CUDA_CONSTRAINTS_FILE,
     AUDIO_SEPARATOR_DEPENDENCIES,
     AUDIO_SEPARATOR_DIFFQ_DEPENDENCY,
     AUDIO_SEPARATOR_MANAGED_REVISION,
     AUDIO_SEPARATOR_PACKAGE,
     AUDIO_SEPARATOR_VERSION,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_DEPENDENCIES,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_INDEX,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_MANAGED_REVISION,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_ONNX_RUNTIME,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_PACKAGE,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_STACK,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_TORCH,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHAUDIO,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHVISION,
     AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY,
     AudioSeparatorRuntime,
     _retarget_console_script,
     audio_separator_diffq_dependency,
+    is_windows_x86_64,
     venv_audio_separator_path,
     venv_python_path,
 )
@@ -76,7 +89,14 @@ def test_override_precedes_path_and_managed_runtime(tmp_path):
 
 @pytest.mark.parametrize(
     "marker",
-    [AUDIO_SEPARATOR_VERSION, "0.47.0\nrecipe=1", "0.47.0\nrecipe=2", _MANAGED_MARKER],
+    [
+        AUDIO_SEPARATOR_VERSION,
+        "0.47.0\nrecipe=1",
+        "0.47.0\nrecipe=2",
+        "0.47.0\nrecipe=4",
+        "0.47.0\nrecipe=5",
+        _MANAGED_MARKER,
+    ],
 )
 def test_managed_detection_requires_current_recipe_without_running_commands(tmp_path, marker):
     def unexpected_run(*args, **kwargs):
@@ -202,6 +222,33 @@ def test_diffq_dependency_matches_platform(platform, expected):
     assert audio_separator_diffq_dependency(platform) == expected
 
 
+@pytest.mark.parametrize(
+    ("platform", "machine", "expected"),
+    [
+        ("win32", "AMD64", True),
+        ("win32", "x86_64", True),
+        ("win32", "ARM64", False),
+        ("linux", "x86_64", False),
+    ],
+)
+def test_cuda_recipe_is_limited_to_windows_x86_64(platform, machine, expected):
+    assert is_windows_x86_64(platform, machine) is expected
+
+
+def test_windows_cuda_recipe_invalidates_only_the_old_windows_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr("riffroom.runtimes.is_windows_x86_64", lambda: True)
+    runtime = AudioSeparatorRuntime(tmp_path, environ={}, executable_resolver=lambda name: None)
+    executable = make_executable(venv_audio_separator_path(runtime.venv))
+    (runtime.runtime / "VERSION").write_text(_MANAGED_MARKER)
+    assert runtime.managed_executable() is None
+
+    (runtime.runtime / "VERSION").write_text("0.47.0\nrecipe=4")
+    assert runtime.managed_executable() is None
+
+    (runtime.runtime / "VERSION").write_text("0.47.0\nrecipe=5")
+    assert runtime.managed_executable() == executable
+
+
 def test_runtime_installs_real_diffq_after_torch_and_omits_samplerate():
     dependencies = " ".join(AUDIO_SEPARATOR_DEPENDENCIES).lower()
 
@@ -213,11 +260,13 @@ def test_runtime_installs_real_diffq_after_torch_and_omits_samplerate():
     assert "diffq" not in dependencies
     assert "samplerate" not in dependencies
     assert AUDIO_SEPARATOR_MANAGED_REVISION == "3"
+    assert AUDIO_SEPARATOR_WINDOWS_CUDA_MANAGED_REVISION == "5"
 
 
 def test_windows_install_uses_fixed_diffq_after_torch_without_macos_environment(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr("riffroom.runtimes.sys.platform", "win32")
+    monkeypatch.setattr("riffroom.runtimes.platform_module.machine", lambda: "AMD64")
     runtime = AudioSeparatorRuntime(
         tmp_path,
         environ={},
@@ -227,13 +276,111 @@ def test_windows_install_uses_fixed_diffq_after_torch_without_macos_environment(
 
     asyncio.run(runtime._install())
 
-    assert calls[1][0][-2:] == ["--no-deps", AUDIO_SEPARATOR_PACKAGE]
-    assert calls[2][0][-len(AUDIO_SEPARATOR_DEPENDENCIES) :] == list(AUDIO_SEPARATOR_DEPENDENCIES)
-    assert any(dependency.startswith("torch") for dependency in calls[2][0])
-    assert calls[3][0][-1] == AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY
-    assert "env" not in calls[3][1]
-    assert calls[4][0][1:] == ["--help"]
-    assert calls[5][0] == [calls[2][0][0], "-c", _AUDIO_SEPARATOR_IMPORT_CHECK]
+    assert calls[1][0][-2:] == ["--no-deps", AUDIO_SEPARATOR_WINDOWS_CUDA_PACKAGE]
+    assert calls[2][0][-2 - len(AUDIO_SEPARATOR_WINDOWS_CUDA_STACK) :] == [
+        "--index-url",
+        AUDIO_SEPARATOR_WINDOWS_CUDA_INDEX,
+        *AUDIO_SEPARATOR_WINDOWS_CUDA_STACK,
+    ]
+    assert AUDIO_SEPARATOR_WINDOWS_CUDA_STACK == (
+        AUDIO_SEPARATOR_WINDOWS_CUDA_TORCH,
+        AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHVISION,
+        AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHAUDIO,
+    )
+    assert AUDIO_SEPARATOR_WINDOWS_CUDA_TORCH == "torch==2.8.0+cu128"
+    assert AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHVISION == "torchvision==0.23.0+cu128"
+    assert AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHAUDIO == "torchaudio==2.8.0+cu128"
+    constraints = runtime.runtime / _WINDOWS_CUDA_CONSTRAINTS_FILE
+    assert constraints.read_text().splitlines() == list(AUDIO_SEPARATOR_WINDOWS_CUDA_STACK)
+    constraint_options = ["--constraint", str(calls[3][0][5])]
+    assert calls[3][0][4:6] == constraint_options
+    assert calls[4][0][4:6] == constraint_options
+    assert Path(constraint_options[1]).name == _WINDOWS_CUDA_CONSTRAINTS_FILE
+    assert calls[3][0][-len(AUDIO_SEPARATOR_WINDOWS_CUDA_DEPENDENCIES) :] == list(
+        AUDIO_SEPARATOR_WINDOWS_CUDA_DEPENDENCIES
+    )
+    assert AUDIO_SEPARATOR_WINDOWS_CUDA_ONNX_RUNTIME in calls[3][0]
+    assert not any(dependency.startswith("torch") for dependency in calls[3][0][4:])
+    assert calls[4][0][-1] == AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY
+    assert "env" not in calls[4][1]
+    assert calls[5][0] == [calls[3][0][0], "-c", _WINDOWS_CUDA_BUILD_CHECK]
+    assert "torch.version.cuda is not None" in calls[5][0][2]
+    assert "torch.cuda.is_available" not in calls[5][0][2]
+    assert calls[6][0][1:] == ["--help"]
+    assert calls[7][0] == [calls[3][0][0], "-c", _AUDIO_SEPARATOR_IMPORT_CHECK]
+    assert (runtime.runtime / "VERSION").read_text() == "0.47.0\nrecipe=5\n"
+
+
+def test_windows_install_rejects_cpu_only_torch_before_publishing(tmp_path, monkeypatch):
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if argv[1:3] == ["-m", "venv"]:
+            venv = Path(argv[-1])
+            make_executable(venv_python_path(venv))
+            make_executable(venv_audio_separator_path(venv))
+        failed_cuda_check = argv[1:] == ["-c", _WINDOWS_CUDA_BUILD_CHECK]
+        return SimpleNamespace(returncode=1 if failed_cuda_check else 0)
+
+    monkeypatch.setattr("riffroom.runtimes.sys.platform", "win32")
+    monkeypatch.setattr("riffroom.runtimes.platform_module.machine", lambda: "AMD64")
+    runtime = AudioSeparatorRuntime(
+        tmp_path,
+        environ={},
+        executable_resolver=lambda name: None,
+        runner=runner,
+    )
+
+    asyncio.run(runtime._install())
+
+    assert any(argv[1:] == ["-c", _WINDOWS_CUDA_BUILD_CHECK] for argv, _ in calls)
+    assert not runtime.runtime.exists()
+    assert runtime.status()["error"] == (
+        "Portable runtime installation failed while verifying the CUDA-enabled Torch build."
+    )
+
+
+@pytest.mark.parametrize(
+    ("probe_payload", "backend", "device"),
+    [
+        ({"available": True, "device": "NVIDIA GeForce RTX 4070 Ti"}, "cuda", "NVIDIA GeForce RTX 4070 Ti"),
+        ({"available": False, "device": None}, "cpu", None),
+    ],
+)
+def test_windows_runtime_reports_cuda_or_cpu_fallback(
+    tmp_path, monkeypatch, probe_payload, backend, device
+):
+    calls = []
+
+    def probe_runner(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(probe_payload))
+
+    monkeypatch.setattr("riffroom.runtimes.is_windows_x86_64", lambda: True)
+    runtime = AudioSeparatorRuntime(
+        tmp_path,
+        environ={},
+        executable_resolver=lambda name: None,
+        probe_runner=probe_runner,
+    )
+    make_executable(venv_audio_separator_path(runtime.venv))
+    make_executable(venv_python_path(runtime.venv))
+    (runtime.runtime / "VERSION").write_text("0.47.0\nrecipe=5")
+
+    status = runtime.status()
+    assert status["compute_backend"] == backend
+    assert status["compute_device"] == device
+    assert runtime.status()["compute_backend"] == backend
+    assert len(calls) == 1
+    assert calls[0][0][0] == str(venv_python_path(runtime.venv))
+    assert calls[0][1] == {
+        "check": False,
+        "shell": False,
+        "capture_output": True,
+        "text": True,
+        "timeout": 15,
+    }
 
 
 def test_missing_distribution_error_is_platform_neutral():
@@ -296,8 +443,11 @@ def test_failed_install_cleans_temp_and_preserves_existing_runtime(tmp_path):
     asyncio.run(runtime._install())
 
     assert sentinel.read_text() == "keep"
-    assert runtime.status()["error"]
-    assert len(runtime.status()["error"]) <= 300
+    status = runtime.status()
+    assert status["error"]
+    assert len(status["error"]) <= 300
+    assert status["install_phase"] is None
+    assert status["install_started_at"] is None
     assert [path for path in runtime.root.iterdir()] == [runtime.runtime]
 
 
@@ -359,11 +509,82 @@ def test_start_install_is_idempotent_while_running(tmp_path):
         second = runtime.start_install()
         assert first["installing"] is True
         assert second["installing"] is True
+        assert first["install_phase"] == "Creating isolated environment"
+        assert second["install_phase"] == first["install_phase"]
+        assert second["install_started_at"] == first["install_started_at"]
         assert runtime._task is task
         release.set()
         await task
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    ("windows_cuda", "expected_phases"),
+    [
+        (
+            False,
+            [
+                "Creating isolated environment",
+                "Installing audio-separator",
+                "Installing runtime dependencies",
+                "Installing Demucs dependency",
+                "Verifying runtime",
+                "Verifying runtime",
+                "Finalizing installation",
+            ],
+        ),
+        (
+            True,
+            [
+                "Creating isolated environment",
+                "Installing audio-separator",
+                "Installing CUDA-enabled PyTorch",
+                "Installing runtime dependencies",
+                "Installing Demucs dependency",
+                "Verifying CUDA-capable Torch build",
+                "Verifying runtime",
+                "Verifying runtime",
+                "Finalizing installation",
+            ],
+        ),
+    ],
+)
+def test_install_status_reports_safe_phase_transitions_and_start_time(
+    tmp_path, monkeypatch, windows_cuda, expected_phases
+):
+    seen = []
+
+    async def runner(argv, **kwargs):
+        seen.append(runtime.status())
+        if argv[1:3] == ["-m", "venv"]:
+            venv = Path(argv[-1])
+            make_executable(venv_python_path(venv))
+            make_executable(venv_audio_separator_path(venv))
+        await asyncio.sleep(0)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("riffroom.runtimes.is_windows_x86_64", lambda: windows_cuda)
+    runtime = AudioSeparatorRuntime(
+        tmp_path, environ={}, executable_resolver=lambda name: None, runner=runner
+    )
+
+    async def exercise():
+        started = runtime.start_install()
+        assert started["install_phase"] == "Creating isolated environment"
+        assert started["install_started_at"].endswith("+00:00")
+        assert str(tmp_path) not in str(started)
+        await runtime._task
+
+    asyncio.run(exercise())
+
+    assert [status["install_phase"] for status in seen] == expected_phases
+    assert all(status["installing"] is True for status in seen)
+    assert len({status["install_started_at"] for status in seen}) == 1
+    finished = runtime.status()
+    assert finished["installing"] is False
+    assert finished["install_phase"] is None
+    assert finished["install_started_at"] is None
 
 
 def test_close_cancels_install_and_cleans_temporary_directory(tmp_path):
@@ -381,6 +602,8 @@ def test_close_cancels_install_and_cleans_temporary_directory(tmp_path):
         await started.wait()
         await runtime.close()
         assert runtime.status()["installing"] is False
+        assert runtime.status()["install_phase"] is None
+        assert runtime.status()["install_started_at"] is None
         assert runtime._task is None
         assert list(runtime.root.iterdir()) == []
 

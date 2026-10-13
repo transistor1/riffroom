@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   ArrowLeft,
   AudioLines,
@@ -21,6 +22,7 @@ import {
   active,
   time,
   type Model,
+  type Run,
   type RuntimeStatus,
   type Track,
 } from "./types";
@@ -45,6 +47,126 @@ type DeleteTarget =
   | { kind: "model-cache"; modelId: string; modelName: string };
 
 type OpenModal = "help" | "models" | null;
+
+export const PORTABLE_RUNTIME_POLL_MS = 1000;
+
+export function schedulePortableRuntimePoll(
+  status: RuntimeStatus | null,
+  refreshStatus: () => Promise<RuntimeStatus>,
+  refreshModels: () => Promise<void>,
+  reportError: (error: Error) => void,
+  schedule: (callback: () => void, delay: number) => number = (
+    callback,
+    delay,
+  ) => window.setTimeout(callback, delay),
+): number | undefined {
+  if (!status?.installing) return undefined;
+  return schedule(() => {
+    void refreshStatus()
+      .then((next) => {
+        if (next.available) return refreshModels();
+      })
+      .catch((error) =>
+        reportError(
+          error instanceof Error ? error : new Error("Runtime status failed."),
+        ),
+      );
+  }, PORTABLE_RUNTIME_POLL_MS);
+}
+
+export function selectedRunFor(
+  track: Track | undefined,
+  runId: string | null,
+): Run | undefined {
+  return track?.runs.find(
+    (candidate) => candidate.id === (runId ?? track.active_run),
+  );
+}
+
+export function separationRunLabel(run: Run, models: Model[]): string {
+  const modelName = models.find((model) => model.id === run.model_id)?.name;
+  return `${modelName ?? run.model_id} · take ${run.take_number}`;
+}
+
+export function removeRunFromState(
+  tracks: Track[],
+  selectedId: string | null,
+  runId: string | null,
+  target: Extract<DeleteTarget, { kind: "run" }>,
+): { tracks: Track[]; runId: string | null } {
+  const targetTrack = tracks.find(
+    (candidate) => candidate.id === target.trackId,
+  );
+  if (!targetTrack) return { tracks, runId };
+
+  const remaining = targetTrack.runs.filter(
+    (candidate) => candidate.id !== target.runId,
+  );
+  const activeRun =
+    targetTrack.active_run === target.runId
+      ? (remaining.at(-1)?.id ?? null)
+      : targetTrack.active_run;
+  const nextTrack = { ...targetTrack, runs: remaining, active_run: activeRun };
+  const selectedRunId = runId ?? targetTrack.active_run;
+  const nextRunId =
+    selectedId === target.trackId && selectedRunId === target.runId
+      ? (activeRun ?? "original")
+      : runId;
+  return {
+    tracks: tracks.map((candidate) =>
+      candidate.id === target.trackId ? nextTrack : candidate,
+    ),
+    runId: nextRunId,
+  };
+}
+
+export async function deleteRunAndRefresh(
+  target: Extract<DeleteTarget, { kind: "run" }>,
+  refresh: () => Promise<void>,
+  request: (path: string, options?: RequestInit) => Promise<unknown> = api,
+  removeStoredMix: (key: string) => void = (key) =>
+    localStorage.removeItem(key),
+): Promise<void> {
+  await request(`/tracks/${target.trackId}/runs/${target.runId}`, {
+    method: "DELETE",
+  });
+  try {
+    removeStoredMix(`riffroom:mix:${target.trackId}:${target.runId}`);
+  } catch {
+    /* Storage may be disabled. */
+  }
+  await refresh();
+}
+
+function formatElapsed(startedAt: string | null, now: number): string | null {
+  if (!startedAt) return null;
+  const started = Date.parse(startedAt);
+  if (!Number.isFinite(started)) return null;
+  const elapsed = Math.max(0, Math.floor((now - started) / 1000));
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = String(elapsed % 60).padStart(2, "0");
+  return minutes ? `${minutes}m ${seconds}s elapsed` : `${elapsed}s elapsed`;
+}
+
+export function PortableRuntimeInstallProgress({
+  status,
+  now = Date.now(),
+}: {
+  status: RuntimeStatus | null;
+  now?: number;
+}) {
+  if (!status?.installing) return null;
+  const elapsed = formatElapsed(status.install_started_at, now);
+  return (
+    <div className="runtime-install-progress" role="status" aria-live="polite">
+      <LoaderCircle className="spin" size={17} />
+      <div>
+        <strong>{status.install_phase ?? "Preparing installation"}</strong>
+        {elapsed && <span>{elapsed}</span>}
+      </div>
+    </div>
+  );
+}
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -85,7 +207,7 @@ export default function App() {
   );
   const fileInput = useRef<HTMLInputElement>(null);
   const track = tracks.find((t) => t.id === selectedId);
-  const run = track?.runs.find((r) => r.id === (runId ?? track.active_run));
+  const run = selectedRunFor(track, runId);
   const model = models.find((m) => m.id === modelId);
   const curatedModels = models.filter((item) => item.curated);
   const visibleModels = models.filter(
@@ -155,14 +277,13 @@ export default function App() {
     void refreshPortableRuntime().catch((e) => setModelError(e.message));
   }, [openModal, refreshPortableRuntime]);
   useEffect(() => {
-    if (!portableRuntime?.installing) return;
-    const timer = window.setTimeout(() => {
-      void refreshPortableRuntime()
-        .then((status) => {
-          if (status.available) return refreshModels();
-        })
-        .catch((e) => setModelError(e.message));
-    }, 1000);
+    const timer = schedulePortableRuntimePoll(
+      portableRuntime,
+      refreshPortableRuntime,
+      refreshModels,
+      (error) => setModelError(error.message),
+    );
+    if (timer === undefined) return;
     return () => window.clearTimeout(timer);
   }, [portableRuntime, refreshModels, refreshPortableRuntime]);
   useEffect(() => {
@@ -311,6 +432,21 @@ export default function App() {
     } finally {
       setRemovingModelId(null);
       setDeleteTarget(null);
+    }
+  }
+  async function removeRun(target: Extract<DeleteTarget, { kind: "run" }>) {
+    const next = removeRunFromState(tracks, selectedId, runId, target);
+    flushSync(() => {
+      setError("");
+      setTracks(next.tracks);
+      setRunId(next.runId);
+      setDeleteTarget(null);
+    });
+    try {
+      await deleteRunAndRefresh(target, refresh);
+    } catch (e) {
+      setError((e as Error).message);
+      await refresh();
     }
   }
   const showImport = importOpen || !track;
@@ -601,11 +737,9 @@ export default function App() {
                         onChange={(e) => setRunId(e.target.value)}
                       >
                         <option value="original">Original mix</option>
-                        {track.runs.map((r, i) => (
+                        {track.runs.map((r) => (
                           <option key={r.id} value={r.id}>
-                            {models.find((m) => m.id === r.model_id)?.name ??
-                              r.model_id}{" "}
-                            · take {i + 1}
+                            {separationRunLabel(r, models)}
                           </option>
                         ))}
                       </select>
@@ -742,6 +876,18 @@ export default function App() {
               Prepared files stay in Riffroom&apos;s local model cache. Removing
               them means the model will prepare again on next use.
             </p>
+            {portableRuntime?.managed_installed &&
+              portableRuntime.compute_backend && (
+                <div className="runtime-compute" role="status">
+                  <strong>Portable compute</strong>
+                  <span>
+                    {portableRuntime.compute_backend === "cuda"
+                      ? `${portableRuntime.compute_device ?? "NVIDIA GPU"} · CUDA`
+                      : "CPU fallback"}
+                  </span>
+                </div>
+              )}
+            <PortableRuntimeInstallProgress status={portableRuntime} />
             {modelError && (
               <div className="manager-error" role="alert">
                 {modelError}
@@ -828,7 +974,9 @@ export default function App() {
                     </div>
                     <span
                       className={`compatibility ${
-                        m.compatibility.compatible ? "compatible" : "unavailable"
+                        m.compatibility.compatible
+                          ? "compatible"
+                          : "unavailable"
                       }${m.compatibility.experimental ? " experimental" : ""}`}
                     >
                       {m.compatibility.label}
@@ -1095,28 +1243,17 @@ export default function App() {
                     void removeModelCache(target);
                     return;
                   }
-                  setDeleteTarget(null);
-                  void action(async () => {
-                    if (target.kind === "track") {
+                  if (target.kind === "track") {
+                    setDeleteTarget(null);
+                    void action(async () => {
                       await api(`/tracks/${target.trackId}`, {
                         method: "DELETE",
                       });
                       if (selectedId === target.trackId) setSelectedId(null);
-                      return;
-                    }
-                    await api(
-                      `/tracks/${target.trackId}/runs/${target.runId}`,
-                      { method: "DELETE" },
-                    );
-                    try {
-                      localStorage.removeItem(
-                        `riffroom:mix:${target.trackId}:${target.runId}`,
-                      );
-                    } catch {
-                      /* Storage may be disabled. */
-                    }
-                    if (selectedId === target.trackId) setRunId(null);
-                  });
+                    });
+                    return;
+                  }
+                  void removeRun(target);
                 }}
               >
                 {deleteTarget.kind === "model-cache"

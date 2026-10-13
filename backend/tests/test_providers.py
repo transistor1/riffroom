@@ -158,6 +158,10 @@ def test_audio_separator_cli_contract_and_normalized_outputs(tmp_path):
     assert "--normalization_threshold" not in argv
     assert "--amplification_threshold" not in argv
     assert "--use_soundfile" in argv
+    # audio-separator 0.47.0 has no CUDA CLI flag. Its Separator selects CUDA
+    # from torch.cuda.is_available() and otherwise keeps this same command on CPU.
+    assert "--device" not in argv
+    assert "--use_cuda" not in argv
     assert json.loads(argv[argv.index("--custom_output_names") + 1]) == {
         "guitar": "guitar",
         "other": "other",

@@ -156,24 +156,28 @@ class Jobs:
                 stems = json.loads((output / "stems.json").read_text())
                 for stem in stems:
                     stem["url"] = f"/api/tracks/{track_id}/audio/{run_id}/{stem['file']}"
-                track = self.store.get(track_id)
-                runs = track.get("runs", []) + [
-                    {
-                        "id": run_id,
-                        "model_id": model_id,
-                        "provider_id": provider_id,
-                        "stems": stems,
-                    }
-                ]
-                self.store.update(
-                    track_id,
-                    status="ready",
-                    message="Ready to practice",
-                    runs=runs,
-                    active_run=run_id,
-                    pending_model=None,
-                    error=None,
-                )
+                with self.store.lock:
+                    track = self.store.get(track_id)
+                    take_number = track["next_take_number"]
+                    track.update(
+                        status="ready",
+                        message="Ready to practice",
+                        runs=track.get("runs", [])
+                        + [
+                            {
+                                "id": run_id,
+                                "take_number": take_number,
+                                "model_id": model_id,
+                                "provider_id": provider_id,
+                                "stems": stems,
+                            }
+                        ],
+                        active_run=run_id,
+                        next_take_number=take_number + 1,
+                        pending_model=None,
+                        error=None,
+                    )
+                    self.store.put(track)
         except asyncio.CancelledError:
             await self._kill_safely(track_id)
             self.store.update(

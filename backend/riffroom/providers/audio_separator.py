@@ -70,6 +70,8 @@ class AudioSeparatorCliProvider:
             raise RuntimeError(_UNAVAILABLE_MESSAGE)
 
         output_names = {name: name for name in profile.stems}
+        # The pinned 0.47.0 CLI has no CUDA device option. Separator automatically
+        # chooses CUDA when its Torch runtime reports it available, else CPU.
         argv = [
             executable,
             str(source),

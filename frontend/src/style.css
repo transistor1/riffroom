@@ -1205,6 +1205,43 @@ h1 em {
   border-radius: 7px;
   background: #293026;
 }
+.runtime-compute {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid #426044;
+  border-radius: 7px;
+  color: #d0e5c8;
+  background: #273629;
+  font-size: 11px;
+}
+.runtime-compute span {
+  color: #a9c5a3;
+  text-align: right;
+}
+.runtime-install-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 11px;
+  border: 1px solid #5a6442;
+  border-radius: 7px;
+  color: #e3e9c8;
+  background: #323528;
+  font-size: 11px;
+}
+.runtime-install-progress div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.runtime-install-progress span {
+  color: #aeb598;
+}
 .manager-error {
   display: flex;
   align-items: center;

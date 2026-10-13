@@ -1,4 +1,5 @@
 import io
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
@@ -217,7 +218,11 @@ def test_runtime_status_and_install_endpoints_do_not_expose_paths(tmp_path):
             "available",
             "managed_installed",
             "installing",
+            "install_phase",
+            "install_started_at",
             "error",
+            "compute_backend",
+            "compute_device",
         }
         response = client.post("/api/runtimes/audio-separator/install")
         assert response.status_code == 202
@@ -523,10 +528,50 @@ def test_delete_run_preserves_track_and_falls_back_to_newest_run(application):
     app, client = application
     track = upload(client)
     tid = track["id"]
-    run_ids = [uuid4().hex for _ in range(3)]
-    add_runs(app, tid, run_ids, active_run=run_ids[1])
+    run_ids = [uuid4().hex for _ in range(5)]
+    add_runs(app, tid, run_ids, active_run=run_ids[2])
     original = app.state.store.directory(tid) / "original.wav"
     original_bytes = original.read_bytes()
+
+    response = client.delete(f"/api/tracks/{tid}/runs/{run_ids[2]}")
+
+    assert response.status_code == 204
+    updated = client.get(f"/api/tracks/{tid}").json()
+    assert [run["id"] for run in updated["runs"]] == [
+        run_ids[0],
+        run_ids[1],
+        run_ids[3],
+        run_ids[4],
+    ]
+    assert [run["take_number"] for run in updated["runs"]] == [1, 2, 4, 5]
+    assert updated["active_run"] == run_ids[4]
+    assert next(run for run in updated["runs"] if run["id"] == updated["active_run"])["take_number"] == 5
+    runs_folder = app.state.store.directory(tid) / "runs"
+    assert not (runs_folder / run_ids[2]).exists()
+    assert (runs_folder / run_ids[0] / "guitar.wav").is_file()
+    assert (runs_folder / run_ids[4] / "guitar.wav").is_file()
+    assert original.read_bytes() == original_bytes
+
+
+def test_delete_run_succeeds_when_windows_still_has_a_stem_open(application, monkeypatch):
+    app, client = application
+    track = upload(client)
+    tid = track["id"]
+    run_ids = [uuid4().hex for _ in range(3)]
+    add_runs(app, tid, run_ids, active_run=run_ids[1])
+    locked_folder = app.state.store.directory(tid) / "runs" / run_ids[1]
+    real_rmtree = shutil.rmtree
+
+    def locked_rmtree(path, *args, **kwargs):
+        if Path(path) == locked_folder:
+            # The run must already be absent from the manifest before cleanup
+            # begins, so no concurrent refresh can select its stem URLs.
+            current = app.state.store.get(tid)
+            assert run_ids[1] not in {run["id"] for run in current["runs"]}
+            raise PermissionError("file is in use")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr("riffroom.app.shutil.rmtree", locked_rmtree)
 
     response = client.delete(f"/api/tracks/{tid}/runs/{run_ids[1]}")
 
@@ -534,11 +579,8 @@ def test_delete_run_preserves_track_and_falls_back_to_newest_run(application):
     updated = client.get(f"/api/tracks/{tid}").json()
     assert [run["id"] for run in updated["runs"]] == [run_ids[0], run_ids[2]]
     assert updated["active_run"] == run_ids[2]
-    runs_folder = app.state.store.directory(tid) / "runs"
-    assert not (runs_folder / run_ids[1]).exists()
-    assert (runs_folder / run_ids[0] / "guitar.wav").is_file()
-    assert (runs_folder / run_ids[2] / "guitar.wav").is_file()
-    assert original.read_bytes() == original_bytes
+    assert client.get(f"/api/tracks/{tid}/audio/{run_ids[1]}/guitar.wav").status_code == 404
+    assert locked_folder.is_dir()
 
 
 def test_delete_last_run_clears_active_run(application):

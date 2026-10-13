@@ -188,3 +188,64 @@ The initial IPv6 tests encountered the installed Starlette TestClient's IPv6 URL
 limitation; explicit Host headers exercise the middleware successfully. No live LAN or
 fresh Windows/Linux host test was performed by that worker. The later user-reported Windows HTTPS LAN/upload and
 successful CPU separation results above supersede those earlier Windows limitations; Linux live validation remains pending.
+
+## Optional Windows CUDA runtime · 2026-10-11 / live follow-up 2026-10-12
+
+Windows x86-64 managed installs now use the fixed `audio-separator[gpu]==0.47.0`,
+`torch==2.8.0+cu128`, `torchvision==0.23.0+cu128`, `torchaudio==2.8.0+cu128`, and
+`onnxruntime-gpu==1.23.2` recipe. The same wheels remain CPU-capable when
+`torch.cuda.is_available()` is false. Windows ARM64 and every non-Windows recipe are unchanged.
+The pinned audio-separator CLI has no CUDA flag; its own 0.47.0 device setup automatically chooses
+CUDA when Torch reports it available, otherwise CPU. Runtime status probes the selected managed
+interpreter once and Model Manager displays the sanitized GPU name plus CUDA, or CPU fallback.
+
+A live Windows x86-64 install on an RTX 4070-class system found that recipe 4 did not preserve this stack.
+`nvidia-smi` saw the GPU (driver 610.88, CUDA UMD 13.3), but the managed interpreter reported
+`torch==2.14.1+cpu`, `torch.version.cuda is None`, and `torch.cuda.is_available() is False`. The later general
+dependency step installed `onnx2torch-py313`, whose `torchvision>=0.9` requirement was unconstrained. Resolving the
+newest torchvision selected its exact newer Torch dependency from PyPI and replaced the previously installed CUDA
+wheel. Recipe 5 installs the official matching PyTorch 2.8 CUDA trio together and writes those exact local-version
+pins to a constraint file used by both later pip steps. Before publication it imports the trio, checks their exact
+versions, and requires non-null `torch.version.cuda`; it deliberately does not call `torch.cuda.is_available()`, so
+installation remains valid on Windows hosts without an NVIDIA GPU. Runtime status still calls
+`torch.cuda.is_available()` to choose CUDA or CPU fallback. Recipe 4 markers are stale and force reinstallation.
+
+Live Windows follow-up on an NVIDIA GeForce RTX 4070 Ti SUPER confirmed that recipe 5 installs successfully and
+Model Manager reports `NVIDIA GeForce RTX 4070 Ti SUPER · CUDA`. Demucs 6 separation completed on CUDA and was
+dramatically faster than CPU. MDX23C DrumSep also completed on CUDA while `nvidia-smi` showed sustained 74–81%
+GPU utilization, about 2.1–2.2 GB VRAM, and about 200 W. Cancellation during separation also succeeded.
+
+Current worker validation on macOS did not install packages or download models:
+
+- Focused runtime/provider/API tests: 96 passed, with two existing deprecation warnings.
+- `.env/bin/ruff check backend scripts`: passed.
+- `npm run build --prefix frontend`: passed.
+- `git diff --check`: passed.
+
+Remaining native Windows x86-64 checks after recipe 5:
+
+1. On a clean supported Python 3.11, 3.12, and 3.13 host, reinstall the managed runtime and confirm
+   the fixed CUDA wheels resolve without a CUDA Toolkit or developer tools.
+2. Extend the successful NVIDIA coverage beyond Demucs 6 and MDX23C DrumSep to the remaining allowlisted
+   portable profiles while confirming readable/aligned output stems.
+3. On a Windows x86-64 host without a compatible NVIDIA device/driver, verify status reports CPU and
+   repeat the existing real CPU separation to confirm fallback behavior.
+4. Recheck paths with spaces, install cancellation/shutdown, failed replacement recovery, repeat launch,
+   and bounded/path-free error reporting with the larger CUDA runtime.
+
+## Windows CUDA release polish · 2026-10-12
+
+Runtime status now reports a fixed user-facing installation phase and UTC start timestamp while installation is
+active. Model Manager polls that status every second and displays the phase with elapsed time, without exposing
+commands, paths, logs, or fabricated percentages. Deleting the selected separation result now synchronously
+switches the mixer to the server-equivalent fallback and aborts the old audio loads before issuing the DELETE;
+deleting the last result switches to Original mix.
+
+Worker validation did not install packages, download models, or change CUDA drivers:
+
+- Focused runtime/API tests: 88 passed, with two existing deprecation warnings.
+- Focused frontend progress/deletion tests: 4 passed.
+- Existing frontend unit suite: 24 passed.
+- `.env/bin/ruff check backend scripts`: passed.
+- `npm run build --prefix frontend`: passed.
+- `git diff --check`: passed.

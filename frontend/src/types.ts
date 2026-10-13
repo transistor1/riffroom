@@ -1,11 +1,18 @@
 export type Stem = { name: string; file: string; url: string; peaks: number[] };
 export type Run = {
   id: string;
+  take_number: number;
   model_id: string;
   provider_id?: string;
   stems: Stem[];
 };
-export type PracticeLoop = { id: string; name: string; a: number; b: number; enabled: boolean };
+export type PracticeLoop = {
+  id: string;
+  name: string;
+  a: number;
+  b: number;
+  enabled: boolean;
+};
 export type PracticeConfig = { loops: PracticeLoop[] };
 export type Track = {
   practice?: PracticeConfig;
@@ -60,7 +67,11 @@ export type RuntimeStatus = {
   available: boolean;
   managed_installed: boolean;
   installing: boolean;
+  install_phase: string | null;
+  install_started_at: string | null;
   error: string | null;
+  compute_backend: "cuda" | "cpu" | null;
+  compute_device: string | null;
 };
 export type Channel = { volume: number; muted: boolean; solo: boolean };
 export type Mix = Record<string, Channel>;

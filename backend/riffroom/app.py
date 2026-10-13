@@ -227,6 +227,7 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
                     "status": "idle",
                     "message": "Imported",
                     "runs": [],
+                    "next_take_number": 1,
                     "active_run": None,
                     "peaks": peaks,
                     "error": None,
@@ -283,11 +284,15 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
 
             # Use the manifest's matched ID, never the untrusted path parameter.
             run_folder = store.directory(track_id) / "runs" / run["id"]
+            # Make the manifest authoritative before touching audio files. On
+            # Windows a browser response can briefly keep a stem open even
+            # after the mixer switches, so physical cleanup must not turn a
+            # completed logical deletion into a 500 response.
+            store.put(track)
             try:
                 shutil.rmtree(run_folder)
-            except FileNotFoundError:
+            except OSError:
                 pass
-            store.put(track)
 
     @app.get("/api/tracks/{track_id}/original")
     def original(track_id: str):

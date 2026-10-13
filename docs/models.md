@@ -111,13 +111,21 @@ separation remains responsible for downloading and converting model files. The o
 explicit portable runtime installation described below; it does not preload model weights.
 
 The portable runtime is isolated from Riffroom's pinned MLX environment at
-`data/runtimes/audio-separator/venv`. Installation is an explicit Model Manager action and always installs exactly
-`audio-separator[cpu]==0.47.0`; the main project dependency and lock files do not include it. Riffroom installs the
-dependencies required by the validated portable paths separately, installing Torch before the real `diffq>=0.2`
-source package. On macOS, DiffQ's build selects the installed Command Line Tools when available. The unused,
+`data/runtimes/audio-separator/venv`. Installation is an explicit Model Manager action. Existing platforms keep
+the exact `audio-separator[cpu]==0.47.0` recipe. Windows x86-64 instead installs
+`audio-separator[gpu]==0.47.0` without dependencies, then installs the matched
+`torch==2.8.0+cu128`, `torchvision==0.23.0+cu128`, and `torchaudio==2.8.0+cu128` stack from PyTorch's fixed CUDA
+12.8 wheel index and `onnxruntime-gpu==1.23.2`; the main project dependency and lock files do not include this
+isolated runtime. `onnx2torch-py313` requires `torchvision>=0.9`, so an unconstrained resolver can select the newest
+torchvision and replace CUDA Torch with the newer CPU Torch version it requires. Riffroom applies the three exact
+CUDA package versions as constraints to every later dependency install. Those wheels supply the needed CUDA/cuDNN
+runtime libraries, so a full CUDA Toolkit is not required. Riffroom installs the remaining dependencies separately before the real platform-specific DiffQ package. On
+macOS, DiffQ's build selects the installed Command Line Tools when available. The unused,
 x86_64-only library bundled by `samplerate==0.1.0` remains excluded. Riffroom creates a temporary venv with its
-running Python, verifies the CLI and imports `Separator`, `DemucsSeparator`, and `HTDemucs`
-without downloading models, then atomically promotes it. A valid
+running Python, verifies that Torch and its companions still have the expected CUDA versions, verifies that
+`torch.version.cuda` is non-null without calling `torch.cuda.is_available()`, then checks the CLI and imports
+`Separator`, `DemucsSeparator`, and `HTDemucs` without downloading models or requiring an NVIDIA GPU. It then
+atomically promotes the runtime. A valid
 `RIFFROOM_AUDIO_SEPARATOR_BIN` administrator override takes precedence, followed by `PATH`, then the managed copy.
 Package names, versions, executable paths and provider classes are not accepted from HTTP or model metadata.
 
@@ -125,22 +133,28 @@ Managed installations also carry a Riffroom recipe revision, separate from the d
 Dependency recipe changes invalidate older managed installations even if that upstream version is unchanged.
 In particular, an old `VERSION` marker containing only `0.47.0` requires explicit reinstallation in Model Manager
 to obtain the real DiffQ dependency. Installation writes the revision-aware marker only after all dependencies
-and execution-stack import and CLI checks succeed; a failed replacement restores the previous runtime. Discovery uses the marker without
-running Python imports or subprocess checks on each status request.
+and execution-stack import and CLI checks succeed; a failed replacement restores the previous runtime. Discovery
+uses the marker without execution checks. On Windows x86-64, runtime status additionally performs one bounded,
+cached probe of the managed interpreter. It exposes only `cuda` plus a sanitized GPU name, `cpu`, or an unknown
+result; subprocess diagnostics and host paths are not returned.
 
-Recipe 2 explicitly installs `audioread>=3`: audio-separator's `spec_utils` imports it directly,
+Windows x86-64 recipe 5 retains the explicit `audioread>=3` install from recipe 3:
+audio-separator's `spec_utils` imports it directly,
 but upstream does not declare it and librosa 1.0 no longer supplies it transitively. The recipe also
 includes upstream's conditional `audioop-lts>=0.2.1` dependency for Python 3.13, where the standard
-library removed `audioop` used by pydub. Recipe 1 and version-only markers are stale and require
-explicit reinstallation. Import verification failures preserve the previous managed runtime.
+library removed `audioop` used by pydub. Older recipe and version-only markers are stale and require
+explicit reinstallation on Windows x86-64; unchanged hosts retain recipe 3. Import verification failures
+preserve the previous managed runtime.
 
 Catalog compatibility separates host capability from runtime readiness and computes both across validated
-variants only. On Apple Silicon each allowlisted model selects `audio-separator` when the portable runtime is ready. Otherwise
-its row stays browsable as **Runtime required · macOS (Apple Silicon)**, normal selectors exclude it, and
+variants only. On Apple Silicon and Windows x86-64 each allowlisted model selects `audio-separator` when the portable runtime is ready. Otherwise
+its row stays browsable as **Runtime required**, normal selectors exclude it, and
 Model Manager offers the explicit portable installer. Installation is never triggered by page load, opening Model
-Manager, or selecting a tab. The installer has portable POSIX/Windows venv path handling, but Riffroom setup and
-these models' declared/validated support remain Apple Silicon macOS only; Windows and Linux setup and validation
-are future work.
+Manager, or selecting a tab. Windows x86-64 is explicitly experimental; Windows ARM64 and Linux execution remain
+unavailable.
+
+The CUDA versions follow the official [PyTorch 2.8 wheel matrix](https://pytorch.org/get-started/previous-versions/)
+and [ONNX Runtime CUDA/PyTorch compatibility guidance](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).
 
 ## Current Apple Silicon runtime
 

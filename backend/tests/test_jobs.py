@@ -134,6 +134,35 @@ def test_cancel_before_task_starts(tmp_path):
     asyncio.run(run())
 
 
+def test_store_backfills_legacy_take_numbers_once_in_run_order(tmp_path):
+    store = Store(tmp_path)
+    tid = uuid4().hex
+    folder = store.directory(tid)
+    folder.mkdir()
+    manifest = folder / "track.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "id": tid,
+                "status": "ready",
+                "created_at": "now",
+                "runs": [
+                    {"id": "first", "stems": []},
+                    {"id": "second", "stems": []},
+                    {"id": "third", "stems": []},
+                ],
+            }
+        )
+    )
+
+    migrated = store.get(tid)
+
+    assert [run["take_number"] for run in migrated["runs"]] == [1, 2, 3]
+    assert migrated["next_take_number"] == 4
+    assert json.loads(manifest.read_text()) == migrated
+    assert store.get(tid) == migrated
+
+
 def test_cancel_running_process_retains_previous_results(tmp_path, monkeypatch):
     real_spawn = asyncio.create_subprocess_exec
     spawned = []
@@ -256,5 +285,56 @@ def test_successful_job_stores_resolved_provider_id(tmp_path, monkeypatch):
         assert portable_run["model_id"] == portable_id
         assert portable_run["provider_id"] == "audio-separator"
         assert spawned[1][6:] == (portable_id, "audio-separator")
+
+    asyncio.run(run())
+
+
+def test_successful_job_keeps_gap_and_uses_persisted_next_take_number(tmp_path, monkeypatch):
+    class EmptyOutput:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class SuccessfulProcess:
+        stdout = EmptyOutput()
+        returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def fake_worker(*args, **kwargs):
+        output = Path(args[4])
+        (output / "stems.json").write_text(json.dumps([]))
+        return SuccessfulProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_worker)
+
+    async def run():
+        store = Store(tmp_path / "tracks")
+        tid = uuid4().hex
+        store.put(
+            {
+                "id": tid,
+                "status": "ready",
+                "created_at": "now",
+                "runs": [{"id": f"run-{take}", "take_number": take, "stems": []} for take in [1, 2, 4, 5]],
+                "next_take_number": 6,
+            }
+        )
+        jobs = Jobs(
+            store,
+            tmp_path / "models",
+            provider_registry={"mlx-audio-separator": AvailableProvider()},
+        )
+
+        jobs.start(tid, "demucs-6")
+        await jobs.tasks[tid]
+
+        track = store.get(tid)
+        assert [run["take_number"] for run in track["runs"]] == [1, 2, 4, 5, 6]
+        assert track["runs"][-1]["id"] == track["active_run"]
+        assert track["next_take_number"] == 7
 
     asyncio.run(run())

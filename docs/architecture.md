@@ -24,10 +24,11 @@ Browser Web Audio: shared AudioContext → one source/gain per stem
 - `audio.py`: FFmpeg format conversion, metadata limits, waveforms, alignment validation.
 - `store.py`: atomic manifests; each track owns its inputs and run folders.
 - `jobs.py`: one inference job at a time; process-group cancellation; error and restart recovery.
-- `runtimes.py`: discovery and atomic installation of the fixed `audio-separator[cpu]==0.47.0` portable runtime
+- `runtimes.py`: discovery and atomic installation of the fixed `audio-separator==0.47.0` portable runtime
   in `data/runtimes/audio-separator/venv`. It honors an administrator executable override first, discovers `PATH`
-  second, and otherwise uses the managed copy. Installation uses argv-only child processes, verifies the CLI before
-  publishing the temporary runtime directory, and keeps installation state and errors in the server process.
+  second, and otherwise uses the managed copy. Windows x86-64 uses the GPU extra with a CPU fallback; other hosts
+  retain the CPU extra. Installation uses argv-only child processes, verifies the CLI before publishing the
+  temporary runtime directory, and keeps installation state and errors in the server process.
 - `models.py`: provider-aware declarative catalog consumed by the UI. The curated layer and the three validated
   portable community profiles are static server-owned metadata. When the optional MLX package is installed, the
   community layer additionally reads its bundled `models.json` and `models-scores.json`, admits entries with an
@@ -107,33 +108,46 @@ could not resolve `dl.fbaipublicfiles.com`, so it did not reach inference. Stabl
 remain declared for `macos-arm64`; `windows-x86_64` remains experimental despite its now-successful real CPU
 separation test, and other Windows/Linux hosts remain unavailable.
 
-The install endpoint accepts no package, version, executable, or provider input. It always creates a temporary
-venv with the running Riffroom Python, installs exactly `audio-separator[cpu]==0.47.0`, and installs the pinned
-package's allowlist-required dependencies separately. It installs Torch and the curated runtime dependencies
-first, then builds the real `diffq>=0.2` package. On macOS the build selects
+The install endpoint accepts no package, version, executable, or provider input. Status exposes only a fixed
+user-facing phase label and the installation start timestamp while work is active; it never exposes argv, paths,
+or subprocess output. It always creates a temporary
+venv with the running Riffroom Python. Existing platforms install exactly `audio-separator[cpu]==0.47.0`.
+Windows x86-64 installs `audio-separator[gpu]==0.47.0` and the matched
+`torch==2.8.0+cu128`, `torchvision==0.23.0+cu128`, and `torchaudio==2.8.0+cu128` stack from the fixed official
+CUDA 12.8 wheel index, plus `onnxruntime-gpu==1.23.2`. `onnx2torch-py313` depends on an otherwise-unbounded
+`torchvision`; therefore the same exact stack is also supplied as a constraint to every later pip resolver step.
+This prevents a newer torchvision from replacing CUDA Torch with its newer exact CPU Torch dependency. The
+CUDA-enabled wheels retain CPU execution when no compatible NVIDIA driver/device is available and do not require
+the CUDA Toolkit. It installs the remaining curated runtime dependencies before the real platform-specific DiffQ
+package. On macOS the build selects
 `/Library/Developer/CommandLineTools` when present; this avoids coupling the source build to an unlicensed or
 incompatible full-Xcode selection while preserving the normal environment elsewhere. `samplerate==0.1.0` stays
 excluded because its wheel bundles an x86_64-only library and none of the validated paths import it. The installer
-checks the expected CLI with `--help`, then imports `Separator`, `DemucsSeparator`, and `HTDemucs`
-before atomically promoting the directory. These imports require no model downloads. A failure removes the temporary
+checks the Windows Torch and companion versions and requires `torch.version.cuda` to be non-null, without requiring
+`torch.cuda.is_available()` or an NVIDIA GPU. It then checks the expected CLI with `--help` and imports `Separator`,
+`DemucsSeparator`, and `HTDemucs` before atomically promoting the directory. These imports require no model downloads. A failure removes the temporary
 directory without replacing an existing runtime, and exposes only a bounded, path-free failure category. App
 shutdown cancels an in-progress installer subprocess. Jobs pass a server-resolved executable to workers through
 `RIFFROOM_AUDIO_SEPARATOR_BIN` only when the process environment does not already contain an explicit
 administrator override; global `PATH` is not changed.
 
 Managed runtime discovery checks a durable `VERSION` marker containing both the upstream version and a
-Riffroom install-recipe revision (`recipe=2`). Bump that revision whenever the dependency recipe or installation
-procedure changes, even when upstream remains at `0.47.0`. A legacy version-only marker is stale and permits
+Riffroom install-recipe revision. Windows x86-64 uses `recipe=5`; unchanged hosts retain `recipe=3`. Bump the
+applicable revision whenever that dependency recipe or installation procedure changes, even when upstream remains
+at `0.47.0`. A legacy version-only marker is stale and permits
 explicit reinstallation from Model Manager. The new marker is written only after dependency installation
 (including real DiffQ), staged execution-stack imports, and both staged and published CLI checks succeed. Replacement keeps the old runtime as
-a backup until verification and marker writing finish, restoring it on failure. Status performs no import or
-subprocess probes and continues to report upstream version `0.47.0`.
+a backup until verification and marker writing finish, restoring it on failure. Status continues to report
+upstream version `0.47.0`; on Windows x86-64 it also runs one bounded, cached probe through the managed Python to
+report `cuda` with a sanitized GPU name or `cpu`. Probe failures report neither backend nor diagnostic internals.
 
-Recipe 2 explicitly installs `audioread>=3`: audio-separator's `spec_utils` imports it directly,
+Windows x86-64 recipe 5 retains the explicit `audioread>=3` install from recipe 3:
+audio-separator's `spec_utils` imports it directly,
 but upstream does not declare it and librosa 1.0 no longer supplies it transitively. The recipe also
 includes upstream's conditional `audioop-lts>=0.2.1` dependency for Python 3.13, where the standard
-library removed `audioop` used by pydub. Recipe 1 and version-only markers are stale and require
-explicit reinstallation. Import verification failures preserve the previous managed runtime.
+library removed `audioop` used by pydub. Older recipe and version-only markers are stale and require
+explicit reinstallation on Windows x86-64; unchanged hosts retain recipe 3. Import verification failures
+preserve the previous managed runtime.
 
 Prepared-file state is intentionally narrower than total provider disk use. Each curated profile declares the
 exact checkpoint, config and/or converted MLX files that Riffroom owns beneath its configured `data/models`
@@ -197,7 +211,10 @@ Supported production model capabilities remain `macos-arm64`. The four explicit 
 declare `windows-x86_64` as experimental, allowing Model Manager installation and use when that runtime becomes
 available. A real Windows x86-64 CPU separation has completed successfully, so the portable path is functionally
 execution-validated under the tested arrangement; the experimental label reflects the still-narrow platform and
-profile coverage. Windows ARM64, Linux and Intel macOS remain outside this capability. Launcher support alone does
+profile coverage. CUDA has completed live Demucs 6 and MDX23C DrumSep separations on an NVIDIA GeForce RTX 4070
+Ti SUPER; audio-separator 0.47.0 has no CUDA CLI switch and automatically selects CUDA from
+`torch.cuda.is_available()`, otherwise using CPU. Windows ARM64,
+Linux and Intel macOS remain outside this capability. Launcher support alone does
 not certify inference support.
 
 A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The mixer accepts arbitrary names; add display labels/icons and choose how the guitar presets target the new names.
@@ -207,7 +224,7 @@ A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The m
 - This is a single-process local application. Do not start multiple Uvicorn workers against one data folder. A future multi-user service would need database-backed jobs and authentication.
 - All selected stems are decoded into browser memory for sample-synchronized playback and audio-clock-scheduled region transitions. Very long tracks use significant RAM. Streaming or an AudioWorklet ring buffer is a future extension.
 - Speed uses Web Audio source playbackRate for sample-synchronized transport and mirrors that value to `@soundtouchjs/audio-worklet` 2.1.1, whose shared post-mix processor preserves tuning. At 0.5×, SoundTouch's auto WSOLA heuristic lengthens its processing windows for the lower internal tempo; rates of 0.75× and above retain the existing fixed profile. The Pitch slider, exact-value field, and reset control independently set the processor's ±12-semitone offset. SoundTouchJS and its installed support packages are distributed under MPL-2.0.
-- Switching results remounts the audio engine and stops playback. Completing the first separation selects its result automatically.
+- Switching results remounts the audio engine and stops playback. Completing the first separation selects its result automatically. Deleting the selected result first applies the server-equivalent fallback in a synchronous client update, aborting its audio loads before the DELETE request; a failed deletion refreshes authoritative state. Deleting the last result switches to Original mix.
 - Mix preferences and the personal model working set are in localStorage, while the library is on disk. The model
   working set affects only normal selection menus; Model Manager discovery and saved-run model labels use the full
   API catalog. Individual completed separation results can be removed without touching the normalized original or

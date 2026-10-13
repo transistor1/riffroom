@@ -3,12 +3,15 @@
 import asyncio
 import errno
 import inspect
+import json
 import os
+import platform as platform_module
 import re
 import shutil
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
@@ -19,13 +22,29 @@ AUDIO_SEPARATOR_VERSION = "0.47.0"
 # Bump whenever Riffroom's dependency recipe or installation procedure changes,
 # even if the upstream package version stays the same. Legacy markers had no revision.
 AUDIO_SEPARATOR_MANAGED_REVISION = "3"
+AUDIO_SEPARATOR_WINDOWS_CUDA_MANAGED_REVISION = "5"
 _MANAGED_MARKER = f"{AUDIO_SEPARATOR_VERSION}\nrecipe={AUDIO_SEPARATOR_MANAGED_REVISION}"
+_WINDOWS_CUDA_MANAGED_MARKER = (
+    f"{AUDIO_SEPARATOR_VERSION}\nrecipe={AUDIO_SEPARATOR_WINDOWS_CUDA_MANAGED_REVISION}"
+)
 AUDIO_SEPARATOR_PACKAGE = f"audio-separator[cpu]=={AUDIO_SEPARATOR_VERSION}"
+AUDIO_SEPARATOR_WINDOWS_CUDA_PACKAGE = f"audio-separator[gpu]=={AUDIO_SEPARATOR_VERSION}"
+AUDIO_SEPARATOR_WINDOWS_CUDA_TORCH = "torch==2.8.0+cu128"
+AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHVISION = "torchvision==0.23.0+cu128"
+AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHAUDIO = "torchaudio==2.8.0+cu128"
+AUDIO_SEPARATOR_WINDOWS_CUDA_STACK = (
+    AUDIO_SEPARATOR_WINDOWS_CUDA_TORCH,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHVISION,
+    AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHAUDIO,
+)
+AUDIO_SEPARATOR_WINDOWS_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
+AUDIO_SEPARATOR_WINDOWS_CUDA_ONNX_RUNTIME = "onnxruntime-gpu==1.23.2"
+_WINDOWS_CUDA_CONSTRAINTS_FILE = "windows-cuda-constraints.txt"
 # samplerate 0.1.0 bundles an x86_64-only dylib and is not imported by the
 # execution-validated paths. Install the remaining dependencies separately so
 # the platform-specific diffq package is installed only after its Torch
 # dependency is available.
-AUDIO_SEPARATOR_DEPENDENCIES = (
+_AUDIO_SEPARATOR_COMMON_DEPENDENCIES = (
     # Imported directly by spec_utils; librosa >=1 no longer brings it transitively.
     "audioread>=3",
     'audioop-lts>=0.2.1; python_version >= "3.13"',
@@ -46,9 +65,15 @@ AUDIO_SEPARATOR_DEPENDENCIES = (
     "scipy<2.0.0,>=1.13.0",
     "six>=1.16",
     "soundfile>=0.12",
+)
+AUDIO_SEPARATOR_DEPENDENCIES = _AUDIO_SEPARATOR_COMMON_DEPENDENCIES + (
     "torch<3,>=2.13",
     "tqdm",
     "onnxruntime>=1.17",
+)
+AUDIO_SEPARATOR_WINDOWS_CUDA_DEPENDENCIES = _AUDIO_SEPARATOR_COMMON_DEPENDENCIES + (
+    "tqdm",
+    AUDIO_SEPARATOR_WINDOWS_CUDA_ONNX_RUNTIME,
 )
 AUDIO_SEPARATOR_DIFFQ_DEPENDENCY = "diffq>=0.2"
 AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY = "diffq-fixed>=0.2"
@@ -59,11 +84,34 @@ _AUDIO_SEPARATOR_IMPORT_CHECK = (
     "from audio_separator.separator.architectures.demucs_separator import DemucsSeparator; "
     "from audio_separator.separator.uvr_lib_v5.demucs.htdemucs import HTDemucs"
 )
+_WINDOWS_CUDA_BUILD_CHECK = (
+    "import sys, torch, torchaudio, torchvision; "
+    "valid = (torch.__version__ == '2.8.0+cu128' "
+    "and torch.version.cuda is not None "
+    "and torchvision.__version__ == '0.23.0+cu128' "
+    "and torchaudio.__version__ == '2.8.0+cu128'); "
+    "sys.exit(0 if valid else 1)"
+)
+_CUDA_PROBE = (
+    "import json, torch; "
+    "available = bool(torch.cuda.is_available()); "
+    "device = torch.cuda.get_device_name(0) if available else None; "
+    "print(json.dumps({'available': available, 'device': device}))"
+)
 AUDIO_SEPARATOR_ENV = "RIFFROOM_AUDIO_SEPARATOR_BIN"
 _VERSION_FILE = "VERSION"
 _MAX_ERROR_LENGTH = 300
 _PACKAGE_NAME = re.compile(r"Failed building wheel for ([A-Za-z0-9_.-]+)", re.IGNORECASE)
 _MACOS_COMMAND_LINE_TOOLS = Path("/Library/Developer/CommandLineTools")
+
+PHASE_CREATE_ENVIRONMENT = "Creating isolated environment"
+PHASE_INSTALL_SEPARATOR = "Installing audio-separator"
+PHASE_INSTALL_CUDA_TORCH = "Installing CUDA-enabled PyTorch"
+PHASE_INSTALL_DEPENDENCIES = "Installing runtime dependencies"
+PHASE_INSTALL_DEMUCS = "Installing Demucs dependency"
+PHASE_VERIFY_CUDA_TORCH = "Verifying CUDA-capable Torch build"
+PHASE_VERIFY_RUNTIME = "Verifying runtime"
+PHASE_FINALIZE = "Finalizing installation"
 
 
 def audio_separator_diffq_dependency(platform: str | None = None) -> str:
@@ -74,11 +122,27 @@ def audio_separator_diffq_dependency(platform: str | None = None) -> str:
     return AUDIO_SEPARATOR_DIFFQ_DEPENDENCY
 
 
+def is_windows_x86_64(
+    platform: str | None = None,
+    machine: str | None = None,
+) -> bool:
+    """Return whether this is the one host with an optional CUDA recipe."""
+    current_platform = sys.platform if platform is None else platform
+    current_machine = platform_module.machine() if machine is None else machine
+    return current_platform == "win32" and current_machine.lower() in {"amd64", "x86_64"}
+
+
+def audio_separator_managed_marker() -> str:
+    """Return the host-specific marker without invalidating unchanged recipes."""
+    return _WINDOWS_CUDA_MANAGED_MARKER if is_windows_x86_64() else _MANAGED_MARKER
+
+
 class CompletedProcessLike(Protocol):
     returncode: int
 
 
 Runner = Callable[..., CompletedProcessLike | Awaitable[CompletedProcessLike]]
+ProbeRunner = Callable[..., CompletedProcessLike]
 ExecutableResolver = Callable[[str], str | None]
 
 
@@ -127,6 +191,7 @@ class AudioSeparatorRuntime:
         environ: Mapping[str, str] | None = None,
         executable_resolver: ExecutableResolver | None = None,
         runner: Runner | None = None,
+        probe_runner: ProbeRunner | None = None,
     ) -> None:
         self.root = data / "runtimes"
         self.runtime = self.root / AUDIO_SEPARATOR_ID
@@ -134,10 +199,14 @@ class AudioSeparatorRuntime:
         self._environ = os.environ if environ is None else environ
         self._executable_resolver = shutil.which if executable_resolver is None else executable_resolver
         self._runner = runner
+        self._probe_runner = subprocess.run if probe_runner is None else probe_runner
         self._task: asyncio.Task[None] | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._state = "idle"
         self._error: str | None = None
+        self._phase: str | None = None
+        self._started_at: str | None = None
+        self._compute_cache: tuple[Path, dict[str, str | None]] | None = None
 
     def _configured_executable(self) -> Path | None:
         configured = self._environ.get(AUDIO_SEPARATOR_ENV)
@@ -153,7 +222,7 @@ class AudioSeparatorRuntime:
             version = version_file.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeError):
             return None
-        return executable if version == _MANAGED_MARKER and _valid_executable(executable) else None
+        return executable if version == audio_separator_managed_marker() and _valid_executable(executable) else None
 
     def executable(self) -> Path | None:
         """Resolve administrator override, PATH, then the managed copy."""
@@ -167,6 +236,7 @@ class AudioSeparatorRuntime:
         return self.managed_executable()
 
     def status(self) -> dict[str, object]:
+        compute = self._managed_compute_status()
         return {
             "id": AUDIO_SEPARATOR_ID,
             "display_name": AUDIO_SEPARATOR_DISPLAY_NAME,
@@ -174,8 +244,55 @@ class AudioSeparatorRuntime:
             "available": self.executable() is not None,
             "managed_installed": self.managed_executable() is not None,
             "installing": self._state == "installing",
+            "install_phase": self._phase if self._state == "installing" else None,
+            "install_started_at": self._started_at if self._state == "installing" else None,
             "error": self._error,
+            **compute,
         }
+
+    def _managed_compute_status(self) -> dict[str, str | None]:
+        """Probe the managed Windows runtime once without exposing diagnostic output."""
+        unknown = {"compute_backend": None, "compute_device": None}
+        executable = self.managed_executable()
+        if (
+            executable is None
+            or self.executable() != executable
+            or not is_windows_x86_64()
+        ):
+            return unknown
+        if self._compute_cache is not None and self._compute_cache[0] == executable:
+            return self._compute_cache[1]
+        try:
+            result = self._probe_runner(
+                [str(venv_python_path(self.venv)), "-c", _CUDA_PROBE],
+                check=False,
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            stdout = getattr(result, "stdout", "")
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode(errors="replace")
+            payload = json.loads(stdout.strip().splitlines()[-1]) if stdout else None
+            if result.returncode != 0 or not isinstance(payload, dict):
+                return unknown
+            available = payload.get("available") is True
+            device = payload.get("device")
+            if not isinstance(device, str):
+                device = None
+            elif device:
+                device = " ".join(device.split())[:100]
+            else:
+                device = None
+            compute = {
+                "compute_backend": "cuda" if available else "cpu",
+                "compute_device": device if available else None,
+            }
+            self._compute_cache = (executable, compute)
+            return compute
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, IndexError):
+            return unknown
 
     def start_install(self) -> dict[str, object]:
         """Start at most one installation task and return immediately."""
@@ -187,8 +304,13 @@ class AudioSeparatorRuntime:
             return self.status()
         self._state = "installing"
         self._error = None
+        self._phase = PHASE_CREATE_ENVIRONMENT
+        self._started_at = datetime.now(timezone.utc).isoformat()
         self._task = asyncio.create_task(self._install())
         return self.status()
+
+    def _set_phase(self, phase: str) -> None:
+        self._phase = phase
 
     async def _run(self, argv: list[str], *, env: Mapping[str, str] | None = None) -> CompletedProcessLike:
         if self._runner is not None:
@@ -288,11 +410,16 @@ class AudioSeparatorRuntime:
             temporary = self.root / f".{AUDIO_SEPARATOR_ID}-{uuid4().hex}.tmp"
             temporary.mkdir()
             temporary_venv = temporary / "venv"
+            self._set_phase(PHASE_CREATE_ENVIRONMENT)
             await self._checked_run(
                 [sys.executable, "-m", "venv", str(temporary_venv)],
                 "creating its isolated environment",
             )
             child_python = venv_python_path(temporary_venv)
+            windows_cuda = is_windows_x86_64()
+            cuda_constraints: Path | None = None
+            package = AUDIO_SEPARATOR_WINDOWS_CUDA_PACKAGE if windows_cuda else AUDIO_SEPARATOR_PACKAGE
+            self._set_phase(PHASE_INSTALL_SEPARATOR)
             await self._checked_run(
                 [
                     str(child_python),
@@ -300,17 +427,43 @@ class AudioSeparatorRuntime:
                     "pip",
                     "install",
                     "--no-deps",
-                    AUDIO_SEPARATOR_PACKAGE,
+                    package,
                 ],
                 "installing the pinned package",
             )
+            if windows_cuda:
+                cuda_constraints = temporary / _WINDOWS_CUDA_CONSTRAINTS_FILE
+                cuda_constraints.write_text(
+                    "".join(f"{requirement}\n" for requirement in AUDIO_SEPARATOR_WINDOWS_CUDA_STACK),
+                    encoding="utf-8",
+                )
+                self._set_phase(PHASE_INSTALL_CUDA_TORCH)
+                await self._checked_run(
+                    [
+                        str(child_python),
+                        "-m",
+                        "pip",
+                        "install",
+                        "--index-url",
+                        AUDIO_SEPARATOR_WINDOWS_CUDA_INDEX,
+                        *AUDIO_SEPARATOR_WINDOWS_CUDA_STACK,
+                    ],
+                    "installing the pinned CUDA-enabled Torch stack",
+                )
+            dependencies = (
+                AUDIO_SEPARATOR_WINDOWS_CUDA_DEPENDENCIES
+                if windows_cuda
+                else AUDIO_SEPARATOR_DEPENDENCIES
+            )
+            self._set_phase(PHASE_INSTALL_DEPENDENCIES)
             await self._checked_run(
                 [
                     str(child_python),
                     "-m",
                     "pip",
                     "install",
-                    *AUDIO_SEPARATOR_DEPENDENCIES,
+                    *(["--constraint", str(cuda_constraints)] if cuda_constraints else []),
+                    *dependencies,
                 ],
                 "installing the runtime dependencies",
             )
@@ -322,25 +475,35 @@ class AudioSeparatorRuntime:
                 and _MACOS_COMMAND_LINE_TOOLS.is_dir()
             ):
                 diffq_environment = {**os.environ, "DEVELOPER_DIR": str(_MACOS_COMMAND_LINE_TOOLS)}
+            self._set_phase(PHASE_INSTALL_DEMUCS)
             await self._checked_run(
                 [
                     str(child_python),
                     "-m",
                     "pip",
                     "install",
+                    *(["--constraint", str(cuda_constraints)] if cuda_constraints else []),
                     diffq_dependency,
                 ],
                 "installing the Demucs dependency",
                 env=diffq_environment,
             )
+            if windows_cuda:
+                self._set_phase(PHASE_VERIFY_CUDA_TORCH)
+                await self._checked_run(
+                    [str(child_python), "-c", _WINDOWS_CUDA_BUILD_CHECK],
+                    "verifying the CUDA-enabled Torch build",
+                )
             cli = venv_audio_separator_path(temporary_venv)
             if not _valid_executable(cli):
                 raise RuntimeError("Portable runtime installation did not produce the expected executable.")
+            self._set_phase(PHASE_VERIFY_RUNTIME)
             await self._checked_run([str(cli), "--help"], "verifying the installed runtime")
             await self._checked_run(
                 [str(child_python), "-c", _AUDIO_SEPARATOR_IMPORT_CHECK],
                 "verifying the separator and Demucs imports",
             )
+            self._set_phase(PHASE_FINALIZE)
             _retarget_console_script(cli, venv_python_path(self.venv))
 
             if self.runtime.exists():
@@ -353,7 +516,10 @@ class AudioSeparatorRuntime:
                     [str(venv_audio_separator_path(self.venv)), "--help"],
                     "verifying the published runtime",
                 )
-                (self.runtime / _VERSION_FILE).write_text(_MANAGED_MARKER + "\n", encoding="utf-8")
+                (self.runtime / _VERSION_FILE).write_text(
+                    audio_separator_managed_marker() + "\n",
+                    encoding="utf-8",
+                )
             except BaseException:
                 if self.runtime.exists():
                     shutil.rmtree(self.runtime, ignore_errors=True)
@@ -366,6 +532,7 @@ class AudioSeparatorRuntime:
                 backup = None
             self._state = "idle"
             self._error = None
+            self._compute_cache = None
         except asyncio.CancelledError:
             self._state = "idle"
             raise
@@ -378,6 +545,8 @@ class AudioSeparatorRuntime:
             )
             self._error = message[:_MAX_ERROR_LENGTH]
         finally:
+            self._phase = None
+            self._started_at = None
             if temporary is not None:
                 shutil.rmtree(temporary, ignore_errors=True)
             if backup is not None and backup.exists() and not self.runtime.exists():
@@ -397,11 +566,22 @@ __all__ = [
     "AUDIO_SEPARATOR_DEPENDENCIES",
     "AUDIO_SEPARATOR_DIFFQ_DEPENDENCY",
     "AUDIO_SEPARATOR_WINDOWS_DIFFQ_DEPENDENCY",
+    "AUDIO_SEPARATOR_WINDOWS_CUDA_DEPENDENCIES",
+    "AUDIO_SEPARATOR_WINDOWS_CUDA_INDEX",
+    "AUDIO_SEPARATOR_WINDOWS_CUDA_MANAGED_REVISION",
+    "AUDIO_SEPARATOR_WINDOWS_CUDA_ONNX_RUNTIME",
+    "AUDIO_SEPARATOR_WINDOWS_CUDA_PACKAGE",
+    "AUDIO_SEPARATOR_WINDOWS_CUDA_STACK",
+    "AUDIO_SEPARATOR_WINDOWS_CUDA_TORCH",
+    "AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHAUDIO",
+    "AUDIO_SEPARATOR_WINDOWS_CUDA_TORCHVISION",
     "AUDIO_SEPARATOR_PACKAGE",
     "AUDIO_SEPARATOR_MANAGED_REVISION",
     "AUDIO_SEPARATOR_VERSION",
     "AudioSeparatorRuntime",
     "audio_separator_diffq_dependency",
+    "audio_separator_managed_marker",
+    "is_windows_x86_64",
     "venv_audio_separator_path",
     "venv_executable_path",
     "venv_python_path",
