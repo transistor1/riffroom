@@ -9,6 +9,7 @@ import {
   clickInputFrequency,
   DEFAULT_CLICK_VOLUME,
   MixerEngine,
+  reassertPlaybackSession,
   stretchParametersForRate,
 } from "./audio";
 
@@ -49,10 +50,12 @@ const eagerlyImportedSoundTouch = soundTouchMock.imported.mock.calls.length > 0;
 let clock: any;
 let decodedDuration = 10;
 class Context {
+  state = "suspended";
   currentTime = 0;
   destination = {};
   audioWorklet = { addModule: vi.fn(async () => {}) };
   resume = vi.fn(async () => {});
+  suspend = vi.fn(async () => { this.state = "suspended"; });
   close = vi.fn(async () => {});
   decodeAudioData = vi.fn(async () => ({ duration: decodedDuration }));
   constructor() {
@@ -146,13 +149,16 @@ beforeEach(() => {
     })),
   );
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 it("imports audio helpers without evaluating the SoundTouch runtime", () => {
   expect(eagerlyImportedSoundTouch).toBe(false);
 });
 
-it("loads stems without AudioWorklet and explains the secure origin requirement on playback", async () => {
+it("explains the secure origin requirement during preparation without AudioWorklet", async () => {
   vi.stubGlobal("AudioWorkletNode", undefined);
   vi.stubGlobal(
     "AudioContext",
@@ -165,12 +171,13 @@ it("loads stems without AudioWorklet and explains the secure origin requirement 
   );
   const importsBefore = soundTouchMock.imported.mock.calls.length;
   const player = new MixerEngine();
-  await player.load(stems, new AbortController().signal);
+  await expect(player.load(stems, new AbortController().signal)).rejects.toThrow(
+    "localhost or HTTPS",
+  );
   expect(clock.decodeAudioData).toHaveBeenCalledTimes(stems.length);
-  expect(player.duration).toBe(10);
+  expect(player.duration).toBe(0);
   expect(soundTouchMock.register).not.toHaveBeenCalled();
   expect(soundTouchMock.nodes).toHaveLength(0);
-  await expect(player.play()).rejects.toThrow("localhost or HTTPS");
   expect(soundTouchMock.imported).toHaveBeenCalledTimes(importsBefore);
   expect(player.playing).toBe(false);
   expect(nodes).toHaveLength(0);
@@ -516,7 +523,7 @@ it("loops and accounts for speed on the shared timeline", async () => {
 it("keeps tempo and requested pitch independent", async () => {
   const player = new MixerEngine();
   await player.load(stems, new AbortController().signal);
-  expect(soundTouchMock.register).not.toHaveBeenCalled();
+  expect(soundTouchMock.register).toHaveBeenCalledTimes(1);
   expect(soundTouchMock.nodes).toHaveLength(0);
   await player.play();
   expect(soundTouchMock.register).toHaveBeenCalledWith(
@@ -564,12 +571,298 @@ it("cannot restart after pause while the browser is resuming its audio context",
       resume = resolve;
     });
   const play = player.play();
+  expect(nodes).toHaveLength(stems.length);
   player.pause();
+  nodes.forEach((source) => expect(source.stop).toHaveBeenLastCalledWith());
   resume();
   await play;
   expect(player.playing).toBe(false);
-  expect(nodes).toHaveLength(0);
+  expect(nodes).toHaveLength(stems.length);
   player.dispose();
+});
+
+it("schedules synchronously with prepared SoundTouch even if resume never resolves", async () => {
+  vi.useFakeTimers();
+  const categories: string[] = [];
+  vi.stubGlobal("navigator", {
+    audioSession: { set type(value: string) { categories.push(value); } },
+  });
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  expect(soundTouchMock.imported).toHaveBeenCalled();
+  expect(soundTouchMock.register).toHaveBeenCalledTimes(1);
+  expect(soundTouchMock.nodes).toHaveLength(0);
+  clock.resume.mockImplementation(() => new Promise<void>(() => {}));
+
+  const play = player.play();
+  expect(clock.resume).toHaveBeenCalledTimes(1);
+  expect(player.playing).toBe(true);
+  expect(nodes).toHaveLength(stems.length);
+  expect(nodes[0].start).toHaveBeenCalledWith(0.04, 0);
+  expect(soundTouchMock.nodes).toHaveLength(1);
+  expect(categories).toEqual(["playback", "ambient"]);
+  await play;
+  expect(categories).toEqual(["playback", "ambient"]);
+  vi.runOnlyPendingTimers();
+  expect(categories).toEqual(["playback", "ambient", "playback"]);
+
+  player.pause();
+  void player.play();
+  expect(soundTouchMock.nodes).toHaveLength(2);
+  player.seek(3);
+  expect(nodes.at(-1).start).toHaveBeenCalledWith(0.04, 3);
+  player.setRate(0.75);
+  expect(nodes.at(-1).playbackRate.value).toBe(0.75);
+  expect(soundTouchMock.register).toHaveBeenCalledTimes(1);
+  player.dispose();
+});
+
+it("waits for worklet preparation before publishing a load and cancels a superseded load", async () => {
+  let finishRegistration!: () => void;
+  soundTouchMock.register.mockImplementationOnce(() => new Promise<void>((resolve) => {
+    finishRegistration = resolve;
+  }));
+  const player = new MixerEngine();
+  const controller = new AbortController();
+  const firstLoad = player.load(stems, controller.signal);
+  await vi.waitFor(() => expect(soundTouchMock.register).toHaveBeenCalledTimes(1));
+  expect(player.duration).toBe(0);
+  await player.play();
+  expect(nodes).toHaveLength(0);
+
+  controller.abort();
+  const secondLoad = player.load([stems[0]], new AbortController().signal);
+  await vi.waitFor(() => expect(clock.decodeAudioData).toHaveBeenCalledTimes(3));
+  finishRegistration();
+  await Promise.all([firstLoad, secondLoad]);
+  expect(soundTouchMock.register).toHaveBeenCalledTimes(1);
+  void player.play();
+  expect(nodes).toHaveLength(1);
+  expect(player.duration).toBe(10);
+  player.dispose();
+});
+
+it("does not replace a seek's sources when an earlier resume resolves", async () => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  let finishResume!: () => void;
+  clock.resume.mockImplementationOnce(() => new Promise<void>((resolve) => {
+    finishResume = resolve;
+  }));
+  void player.play();
+  player.seek(4);
+  expect(nodes).toHaveLength(4);
+  expect(nodes[2].start).toHaveBeenCalledWith(0.04, 4);
+  finishResume();
+  await Promise.resolve();
+  expect(nodes).toHaveLength(4);
+  expect(player.playing).toBe(true);
+  player.dispose();
+});
+
+it("attempts resume for Safari's interrupted state and contains resume failures", async () => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  clock.state = "interrupted";
+  clock.resume.mockRejectedValueOnce(new Error("Interrupted"));
+  await player.play();
+  expect(clock.resume).toHaveBeenCalledTimes(1);
+  expect(nodes).toHaveLength(stems.length);
+  player.pause();
+  clock.resume.mockImplementationOnce(() => { throw new Error("Unavailable"); });
+  await player.play();
+  expect(player.playing).toBe(true);
+  player.dispose();
+});
+
+it("reasserts playback on Play and foreground recovery without restarting paused music", async () => {
+  vi.useFakeTimers();
+  const categories: string[] = [];
+  vi.stubGlobal("navigator", {
+    audioSession: { set type(value: string) { categories.push(value); } },
+  });
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  expect(categories).toEqual(["playback"]);
+  clock.state = "running";
+  await player.play();
+  expect(categories).toEqual(["playback", "ambient"]);
+  vi.runOnlyPendingTimers();
+  expect(categories).toEqual(["playback", "ambient", "playback"]);
+  expect(clock.resume).not.toHaveBeenCalled();
+  clock.state = "interrupted";
+  player.handleVisibilityChange(false);
+  expect(categories.at(-1)).toBe("ambient");
+  vi.runOnlyPendingTimers();
+  expect(categories.slice(-2)).toEqual(["ambient", "playback"]);
+  expect(clock.resume).toHaveBeenCalledTimes(1);
+  expect(nodes).toHaveLength(stems.length);
+  player.pause();
+  categories.length = 0;
+  player.handleVisibilityChange(false);
+  expect(categories).toEqual([]);
+  expect(clock.resume).toHaveBeenCalledTimes(1);
+  expect(player.playing).toBe(false);
+  player.dispose();
+});
+
+it.each([true, false])("suspends and resumes a running context without changing music playback (%s)", async (playing) => {
+  vi.useFakeTimers();
+  const categories: string[] = [];
+  vi.stubGlobal("navigator", {
+    audioSession: { set type(value: string) { categories.push(value); } },
+  });
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  if (playing) await player.play();
+  vi.runOnlyPendingTimers();
+  categories.length = 0;
+  clock.resume.mockClear();
+  clock.state = "running";
+  const sources = [...nodes];
+  const stops = sources.map((source) => [...source.stop.mock.calls]);
+  const processors = [...soundTouchMock.nodes];
+  const gains = [...gainNodes];
+  player.handleVisibilityChange(true);
+  player.handleVisibilityChange(true);
+  expect(clock.suspend).toHaveBeenCalledTimes(1);
+  expect(player.playing).toBe(playing);
+  player.handleVisibilityChange(false);
+  expect(categories).toEqual(["ambient"]);
+  expect(clock.resume).toHaveBeenCalledTimes(1);
+  vi.runOnlyPendingTimers();
+  expect(categories).toEqual(["ambient", "playback"]);
+  player.handleVisibilityChange(false);
+  expect(clock.resume).toHaveBeenCalledTimes(1);
+  expect(player.playing).toBe(playing);
+  expect(nodes).toEqual(sources);
+  expect(soundTouchMock.nodes).toEqual(processors);
+  expect(gainNodes).toEqual(gains);
+  sources.forEach((source, index) => expect(source.stop.mock.calls).toEqual(stops[index]));
+  if (!playing) expect(nodes).toHaveLength(0);
+  player.dispose();
+});
+
+it("keeps music paused when paused during our visibility suspension", async () => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  clock.state = "running";
+  await player.play();
+  player.handleVisibilityChange(true);
+  player.pause();
+  player.handleVisibilityChange(false);
+  expect(clock.resume).toHaveBeenCalledTimes(1);
+  expect(player.playing).toBe(false);
+  expect(nodes).toHaveLength(stems.length);
+  expect(soundTouchMock.nodes).toHaveLength(1);
+  nodes.forEach((source) => expect(source.stop).toHaveBeenLastCalledWith());
+  player.dispose();
+});
+
+it.each([true, false])("does not own or resume an already suspended context (%s)", async (playing) => {
+  vi.useFakeTimers();
+  const categories: string[] = [];
+  vi.stubGlobal("navigator", {
+    audioSession: { set type(value: string) { categories.push(value); } },
+  });
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  if (playing) await player.play();
+  vi.runOnlyPendingTimers();
+  categories.length = 0;
+  clock.resume.mockClear();
+  clock.state = "suspended";
+  player.handleVisibilityChange(true);
+  player.handleVisibilityChange(false);
+  expect(clock.suspend).not.toHaveBeenCalled();
+  expect(clock.resume).not.toHaveBeenCalled();
+  expect(categories).toEqual([]);
+  expect(player.playing).toBe(playing);
+  player.dispose();
+});
+
+it("queues foreground resume while our background suspend is still pending", async () => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  clock.state = "running";
+  let finishSuspend!: () => void;
+  clock.suspend.mockImplementationOnce(() => new Promise<void>((resolve) => {
+    finishSuspend = resolve;
+  }));
+  player.handleVisibilityChange(true);
+  player.handleVisibilityChange(true);
+  player.handleVisibilityChange(false);
+  expect(clock.suspend).toHaveBeenCalledTimes(1);
+  expect(clock.resume).toHaveBeenCalledTimes(1);
+  finishSuspend();
+  await Promise.resolve();
+  expect(nodes).toHaveLength(0);
+  expect(player.playing).toBe(false);
+  player.dispose();
+});
+
+it.each([true, false])("contains suspend failures and clears suspension ownership (throws: %s)", async (throws) => {
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  clock.state = "running";
+  clock.suspend.mockImplementationOnce(() => {
+    if (throws) throw new Error("Unavailable");
+    return Promise.reject(new Error("Unavailable"));
+  });
+  expect(() => player.handleVisibilityChange(true)).not.toThrow();
+  await Promise.resolve();
+  clock.state = "suspended";
+  player.handleVisibilityChange(false);
+  expect(clock.resume).not.toHaveBeenCalled();
+  player.dispose();
+});
+
+it("forces ambient now and playback only on the next task", () => {
+  vi.useFakeTimers();
+  const categories: string[] = [];
+  vi.stubGlobal("navigator", {
+    audioSession: { set type(value: string) { categories.push(value); } },
+  });
+  reassertPlaybackSession(true);
+  expect(categories).toEqual(["ambient"]);
+  expect(vi.getTimerCount()).toBe(1);
+  vi.runOnlyPendingTimers();
+  expect(categories).toEqual(["ambient", "playback"]);
+});
+
+it("falls back to playback immediately when scheduling recovery fails", () => {
+  const categories: string[] = [];
+  vi.stubGlobal("navigator", {
+    audioSession: { set type(value: string) { categories.push(value); } },
+  });
+  const schedule = vi.fn(() => { throw new Error("Unavailable"); });
+  expect(() => reassertPlaybackSession(true, schedule)).not.toThrow();
+  expect(categories).toEqual(["ambient", "playback"]);
+});
+
+it("feature-detects AudioSession and contains getter and category setter failures", () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("navigator", undefined);
+  expect(() => reassertPlaybackSession(true)).not.toThrow();
+  vi.stubGlobal("navigator", {});
+  expect(() => reassertPlaybackSession(true)).not.toThrow();
+  vi.stubGlobal("navigator", {
+    get audioSession() { throw new Error("Unavailable"); },
+  });
+  expect(() => reassertPlaybackSession(true)).not.toThrow();
+  const categories: string[] = [];
+  vi.stubGlobal("navigator", {
+    audioSession: {
+      set type(value: string) {
+        categories.push(value);
+        throw new Error("Unsupported category");
+      },
+    },
+  });
+  expect(() => reassertPlaybackSession(true)).not.toThrow();
+  expect(categories).toEqual(["ambient"]);
+  expect(() => vi.runOnlyPendingTimers()).not.toThrow();
+  expect(categories).toEqual(["ambient", "playback"]);
 });
 
 const regions = [

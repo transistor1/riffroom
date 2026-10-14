@@ -631,6 +631,10 @@ export default function Mixer({
     player.setLoopPlan(loopMode, loops);
     player.setClickOptions(beatGrid, countInBars, clickEnabled);
     player.setClickVolume(clickVolume);
+    const recoverAudio = () => {
+      player.handleVisibilityChange(document.visibilityState === "hidden");
+    };
+    document.addEventListener("visibilitychange", recoverAudio);
     const timer = window.setInterval(() => {
       const p = player.position();
       if (player.playing && !player.looping && p >= player.duration)
@@ -640,6 +644,7 @@ export default function Mixer({
     }, 50);
     return () => {
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", recoverAudio);
       player.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

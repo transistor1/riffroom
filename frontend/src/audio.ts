@@ -61,6 +61,45 @@ export function clickInputFrequency(
   return (outputFrequency * rate) / 2 ** (pitchSemitones / 12);
 }
 
+/** Best-effort recovery for Safari's per-tab audio session category wedge. */
+export function reassertPlaybackSession(
+  forceTransition = false,
+  schedule: (callback: () => void) => void = (callback) => { setTimeout(callback, 0); },
+): void {
+  try {
+    if (typeof navigator === "undefined") return;
+    const session = (navigator as Navigator & {
+      audioSession?: { type: string };
+    }).audioSession;
+    if (!session) return;
+    const playback = () => {
+      try {
+        session.type = "playback";
+      } catch {
+        // Category setters can also throw in the later task.
+      }
+    };
+    if (forceTransition) {
+      try {
+        session.type = "ambient";
+      } catch {
+        // Still try playback if this browser rejects the ambient category.
+      }
+      try {
+        // WebKit 323104 requires a different category across task boundaries.
+        schedule(playback);
+      } catch {
+        // Do not strand the session at ambient if scheduling is unavailable.
+        playback();
+      }
+      return;
+    }
+    playback();
+  } catch {
+    // The experimental API (including its getter) can be absent or throw.
+  }
+}
+
 /** All stems share one audio clock and start sample, including seeks and loops. */
 export class MixerEngine {
   context: AudioContext | null = null;
@@ -68,7 +107,8 @@ export class MixerEngine {
   private clickOutput: GainNode | null = null;
   private limiter: DynamicsCompressorNode | null = null;
   private soundTouch: SoundTouchNode | null = null;
-  private soundTouchRegistered = false;
+  private soundTouchConstructor: typeof SoundTouchNode | null = null;
+  private soundTouchPreparation: Promise<void> | null = null;
   private buffers = new Map<string, AudioBuffer>();
   private sources = new Set<AudioBufferSourceNode>();
   private clickSources = new Map<OscillatorNode, number>();
@@ -76,8 +116,8 @@ export class MixerEngine {
   private startedAt = 0;
   private offset = 0;
   private generation = 0;
-  private playIntent = 0;
   private wantsPlay = false;
+  private visibilitySuspension: object | null = null;
   playing = false;
   duration = 0;
   rate = 1;
@@ -105,6 +145,7 @@ export class MixerEngine {
   private init() {
     if (!this.context) {
       this.context = new AudioContext();
+      reassertPlaybackSession();
       this.master = this.context.createGain();
       this.clickOutput = this.context.createGain();
       // A fast final limiter protects the independently boosted click and music sum.
@@ -122,18 +163,33 @@ export class MixerEngine {
     return this.context;
   }
 
-  private async initSoundTouch(ctx: AudioContext) {
+  private prepareSoundTouch(ctx: AudioContext): Promise<void> {
+    if (this.soundTouchPreparation) return this.soundTouchPreparation;
+    this.soundTouchPreparation = this.registerSoundTouch(ctx).catch((error) => {
+      this.soundTouchPreparation = null;
+      throw error;
+    });
+    return this.soundTouchPreparation;
+  }
+
+  private async registerSoundTouch(ctx: AudioContext) {
     if (!ctx.audioWorklet)
       throw new Error(
         "Riffroom's browser audio processing requires AudioWorklet. Open Riffroom on localhost or HTTPS to enable it.",
       );
     const { SoundTouchNode } = await import("@soundtouchjs/audio-worklet");
-    if (!this.soundTouchRegistered) {
-      await SoundTouchNode.register(ctx, soundTouchProcessorUrl);
-      this.soundTouchRegistered = true;
-    }
+    await SoundTouchNode.register(ctx, soundTouchProcessorUrl);
+    this.soundTouchConstructor = SoundTouchNode;
+  }
+
+  private initSoundTouch(ctx: AudioContext) {
     if (this.soundTouch) return;
-    const node = new SoundTouchNode({ context: ctx, outputChannelCount: 2 });
+    const Constructor = this.soundTouchConstructor;
+    if (!Constructor)
+      throw new Error(
+        "Riffroom's browser audio processing is not ready. Reload the song to retry.",
+      );
+    const node = new Constructor({ context: ctx, outputChannelCount: 2 });
     node.setStretchParameters(stretchParametersForRate(this.rate));
     this.soundTouch = node;
     this.updateSoundTouchParameters();
@@ -173,6 +229,8 @@ export class MixerEngine {
       if (signal.aborted || version !== this.generation) return;
       decoded.set(stem.name, buffer);
     }
+    if (signal.aborted || version !== this.generation) return;
+    await this.prepareSoundTouch(ctx);
     if (signal.aborted || version !== this.generation) return;
     this.buffers = decoded;
     this.duration = Math.min(...[...decoded.values()].map((b) => b.duration));
@@ -373,15 +431,13 @@ export class MixerEngine {
 
   async play(requestCountIn = false) {
     if (this.playing || !this.buffers.size) return;
-    this.wantsPlay = true;
     const ctx = this.init();
-    const intent = ++this.playIntent;
-    await ctx.resume();
-    if (intent !== this.playIntent || this.playing || !this.buffers.size)
-      return;
-    await this.initSoundTouch(ctx);
-    if (intent !== this.playIntent || this.playing || !this.buffers.size)
-      return;
+    reassertPlaybackSession(true);
+    // Safari needs resume and source scheduling in the same user gesture.
+    // No resume continuation may rebuild sources after pause/seek/load.
+    this.resumeContext();
+    this.initSoundTouch(ctx);
+    this.wantsPlay = true;
     if (this.offset >= this.duration) this.offset = 0;
     if (this.looping) {
       let index = this.route.findIndex(
@@ -423,9 +479,55 @@ export class MixerEngine {
       this.scheduler = setInterval(this.schedule, 100);
   }
 
+  private resumeContext(force = false) {
+    const ctx = this.context;
+    // Safari also reports the nonstandard "interrupted" state.
+    if (!ctx || ctx.state === "closed") return;
+    if (!force && !["suspended", "interrupted"].includes(ctx.state)) return;
+    try {
+      void ctx.resume().catch(() => {});
+    } catch {
+      // Recovery is best-effort; a later Play/foreground gesture can retry.
+    }
+  }
+
+  recoverAudio() {
+    if (!this.playing && !this.wantsPlay) return;
+    reassertPlaybackSession(true);
+    this.resumeContext();
+  }
+
+  handleVisibilityChange(hidden: boolean) {
+    const ctx = this.context;
+    if (!ctx || ctx.state === "closed") return;
+    if (hidden) {
+      if (ctx.state !== "running" || this.visibilitySuspension) return;
+      const suspension = {};
+      this.visibilitySuspension = suspension;
+      const failed = () => {
+        if (this.visibilitySuspension === suspension)
+          this.visibilitySuspension = null;
+      };
+      try {
+        void ctx.suspend().catch(failed);
+      } catch {
+        failed();
+      }
+      return;
+    }
+    if (this.visibilitySuspension) {
+      this.visibilitySuspension = null;
+      reassertPlaybackSession(true);
+      // Queue resume even if the preceding suspend has not changed state yet.
+      // Neither operation changes music intent or rebuilds its source graph.
+      this.resumeContext(true);
+    } else if ((ctx.state as string) === "interrupted") {
+      this.recoverAudio();
+    }
+  }
+
   pause() {
     this.wantsPlay = false;
-    this.playIntent++;
     if (this.scheduler !== null) clearInterval(this.scheduler);
     this.scheduler = null;
     const wasPlaying = this.playing;
@@ -496,6 +598,7 @@ export class MixerEngine {
   }
   dispose() {
     this.generation++;
+    this.visibilitySuspension = null;
     this.pause();
     this.buffers.clear();
     this.resetSoundTouch();
