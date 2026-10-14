@@ -22,8 +22,8 @@ import {
   Volume2,
   Mic2,
 } from "lucide-react";
-import { loadPractice, savePractice } from "../api";
-import { MixerEngine } from "../audio";
+import { api, loadPractice, savePractice } from "../api";
+import { DEFAULT_CLICK_VOLUME, MixerEngine } from "../audio";
 import {
   time,
   preciseTime,
@@ -457,6 +457,9 @@ export default function Mixer({
   const [rate, setRate] = useState(1);
   const [pitch, setPitch] = useState(0);
   const [pitchInput, setPitchInput] = useState("0.0");
+  const [countInBars, setCountInBars] = useState(2);
+  const [clickEnabled, setClickEnabled] = useState(false);
+  const [clickVolume, setClickVolume] = useState(DEFAULT_CLICK_VOLUME);
   const [loops, setLoops] = useState<PracticeLoop[]>(track.practice?.loops ?? []);
   const [loopMode, setLoopMode] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -489,6 +492,15 @@ export default function Mixer({
   const pending = useRef<PracticeLoop[] | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selected = loops.find(loop => loop.id === selectedId);
+  const beatAnalysis = track.beat_analysis;
+  const beatGrid = beatAnalysis?.status === "ready" && beatAnalysis.beats &&
+    beatAnalysis.downbeats && beatAnalysis.time_signature
+    ? { beats: beatAnalysis.beats, downbeats: beatAnalysis.downbeats,
+        time_signature: beatAnalysis.time_signature }
+    : null;
+  const beatKey = beatGrid
+    ? `${beatGrid.beats.join(",")}|${beatGrid.downbeats.join(",")}|${beatGrid.time_signature}`
+    : "none";
   // Stable sort preserves original order for equal starts without changing saved data.
   const timelineLoops = [...loops].sort((a, b) => a.a - b.a);
   useEffect(() => {
@@ -503,6 +515,10 @@ export default function Mixer({
     };
   }, [track.id]);
   useEffect(() => { engine.current?.setLoopPlan(loopMode, loops); }, [loopMode, loops]);
+  useEffect(() => {
+    engine.current?.setClickOptions(beatGrid, countInBars, clickEnabled);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [beatKey, countInBars, clickEnabled]);
   useEffect(() => {
     const preserved = preserveStemMix(mix, stems);
     const next =
@@ -557,10 +573,12 @@ export default function Mixer({
     engine.current = player;
     // The syncing effect above runs before creation on mount; seed this engine too.
     player.setLoopPlan(loopMode, loops);
+    player.setClickOptions(beatGrid, countInBars, clickEnabled);
+    player.setClickVolume(clickVolume);
     const timer = window.setInterval(() => {
       const p = player.position();
       if (player.playing && !player.looping && p >= player.duration)
-        player.pause();
+        player.stop();
       setPosition(p);
       setPlaying(player.playing);
     }, 50);
@@ -611,7 +629,7 @@ export default function Mixer({
     if (!loaded) return;
     const player = engine.current!;
     if (player.playing) player.pause();
-    else void player.play().catch((e) => setError(e.message));
+    else void player.play(true).catch((e) => setError(e.message));
     setPlaying(player.playing);
   }, [loaded]);
   useEffect(() => {
@@ -812,6 +830,39 @@ export default function Mixer({
             {loopMode && !loops.some(loop => loop.enabled) && <small>Select at least one loop</small>}
           </div>
           <div className="playback-adjustments">
+            <div className="click-controls" aria-label="Beat click controls">
+              {beatGrid ? <>
+                <label className="speed">Count-in{" "}<select value={countInBars}
+                  onChange={event => setCountInBars(+event.target.value)}>
+                  <option value={0}>Off</option>
+                  {[1, 2, 3, 4].map(bars => <option key={bars} value={bars}>
+                    {bars} bar{bars === 1 ? "" : "s"}
+                  </option>)}
+                </select></label>
+                <button className={`small-button ${clickEnabled ? "selected" : ""}`}
+                  aria-pressed={clickEnabled} onClick={() => setClickEnabled(!clickEnabled)}>Click</button>
+                <label className="click-volume">
+                  <span>Click level</span>
+                  <input aria-label="Click volume" type="range" min="0" max="2"
+                    step="0.05" value={clickVolume} onChange={event => {
+                      const value = +event.target.value;
+                      setClickVolume(value);
+                      engine.current?.setClickVolume(value);
+                    }} />
+                  <span>{Math.round(clickVolume * 100)}%</span>
+                </label>
+              </> : <button className="small-button"
+                disabled={beatAnalysis?.status === "queued" || beatAnalysis?.status === "processing"}
+                onClick={() => {
+                  setError("");
+                  void api(`/tracks/${track.id}/beats`, { method: "POST" })
+                    .catch(reason => setError(reason.message));
+                }}>
+                {beatAnalysis?.status === "queued" || beatAnalysis?.status === "processing"
+                  ? "Analyzing beats…" : "Analyze beats"}
+              </button>}
+              {beatAnalysis?.status === "error" && <small role="status">{beatAnalysis.error}</small>}
+            </div>
             <label className="speed">
               Speed{" "}
               <select

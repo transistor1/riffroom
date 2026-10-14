@@ -25,6 +25,7 @@ Save passages such as a chorus or solo, enable the ones you want, and cycle thro
 - **Make a backing track:** mix guitar, vocals, drums, bass, piano and other instruments with the six-stem options. Each separated part is called a *stem*.
 - **Listen closely:** solo the guitar, mute another instrument, or combine solos to hear how parts fit together.
 - **Work on a passage:** save and cycle through multiple practice loops, change speed while preserving tuning, and adjust pitch independently.
+- **Start in time:** analyze the original mix for a musical beat/downbeat grid, choose a one-to-four-bar count-in, and optionally keep the click running.
 - **Compare splitting methods:** keep multiple results for a song and switch between them and the original.
 - **Keep your practice local:** save songs and results on your computer and download individual stems as WAV files. No account, API key, paid service or cloud upload is needed.
 
@@ -37,12 +38,13 @@ Song splitting is approximate: expect some instrument bleed and artifacts, espec
 3. **Play guitar with the band** mutes the guitar. **Hear just the guitar** solos it.
 4. Use each stem's **M**, **S**, and volume slider. Volume runs from 0–200%; the master sets overall output. Multiple solos work together; mute takes precedence.
 5. Seek to a passage and click **Add loop**. Name it, edit start/end as seconds or **m:ss.mmm**, or nudge either boundary by **±0.1s**. Select the loops you want and enable **Loop** to cycle through them in timeline order, skipping gaps. Space plays/pauses, and arrow keys skip five seconds when you aren't editing a control.
-6. Try another model from the bottom of the track page. Each completed root run remains available in **Listening to**, alongside the original.
-7. Use **Split further** on a stem to run another visible, compatible model on that part. The child stems replace
+6. Click **Analyze beats** once for a song, then choose a 1–4 bar count-in (or Off) and optionally enable **Click**. Count-in preserves the exact playhead or loop boundary; it does not snap or move it. Pausing and resuming does not count in again.
+7. Try another model from the bottom of the track page. Each completed root run remains available in **Listening to**, alongside the original.
+8. Use **Split further** on a stem to run another visible, compatible model on that part. The child stems replace
    their parent in the mixer; use the split selector to return to the unsplit parent or choose another saved split.
    Splits can be chained recursively. Because each stage only receives its parent stem, leakage or missing audio
    from an earlier stage carries into every later stage.
-8. Use a stem's download arrow to save its WAV file.
+9. Use a stem's download arrow to save its WAV file.
 
 Mix levels, mutes, and solos are remembered per result in this browser. Track audio and all completed separation results persist on disk. Named loops and their selection checkboxes are saved with the song and shared across results. Loop mode defaults off each time the mixer opens. Play position, speed, and master output reset when changing results. Speed changes tempo while preserving tuning, and the Pitch control transposes playback independently.
 
@@ -105,6 +107,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1 -Check
 ```
 
 Uploads are limited to **512 MB and 20 minutes**. Decoded audio and stems use substantially more memory and disk than an MP3. The browser holds the selected result in memory, so shorter tracks and fewer tabs help on a 16 GB machine. A full song can take several minutes on an M1; progress reports stages, not a promised completion time.
+
+### Optional beat tracking and click
+
+The click grid uses [CPJKU Beat This!](https://github.com/CPJKU/beat_this) locally. It analyzes the decoded original/full mix, so the grid remains on the song timeline when takes or nested stems change. Install the optional dependency in Riffroom's environment:
+
+```bash
+.env/bin/python -m pip install -e '.[beats]'
+```
+
+The first explicit **Analyze beats** action loads the official `final0` checkpoint and may download its roughly 78 MB weights into PyTorch's user cache; importing a song and normal playback never starts inference or a weight download. Set `RIFFROOM_BEAT_MODEL` to a local checkpoint path to use pre-provisioned weights or another Beat This! checkpoint. Analysis runs offline after weights are present and stores only timestamps plus model/version/provenance in the song manifest. Deleting a song removes its grid with the manifest but deliberately retains shared cached weights. Beat This! and its published weights are MIT licensed.
+
+Beat tracking is optional and CPU-based in this integration, so the same path is intended for macOS, Windows, and Linux wherever Beat This!'s PyTorch/torchaudio dependencies install successfully; this does not claim completed validation on every platform. If the package, checkpoint, or inference is unavailable, Riffroom records an explicit error and leaves count-in/click controls unavailable. It never substitutes a fixed-BPM metronome or fabricated result. A valid grid may be phase-extended backward solely to schedule pre-roll before a sparse intro; persisted analysis timestamps are never modified.
 
 ### LAN access / testing another computer
 

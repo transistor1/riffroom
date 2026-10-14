@@ -20,6 +20,23 @@ export type PracticeLoop = {
   enabled: boolean;
 };
 export type PracticeConfig = { loops: PracticeLoop[] };
+export type BeatGrid = {
+  beats: number[];
+  downbeats: number[];
+  time_signature: number;
+};
+export type BeatAnalysis = Partial<BeatGrid> & {
+  status: "queued" | "processing" | "ready" | "error";
+  message: string;
+  error: string | null;
+  provider?: string;
+  model?: string;
+  source?: "original_mix";
+  analysis_version?: number;
+  package_version?: string;
+  created_at?: string;
+  time_signature_source?: "default" | "inferred";
+};
 export type Track = {
   practice?: PracticeConfig;
   id: string;
@@ -35,6 +52,7 @@ export type Track = {
   error: string | null;
   pending_model?: string;
   pending_source?: RunSource | null;
+  beat_analysis?: BeatAnalysis;
 };
 export type Model = {
   id: string;

@@ -736,6 +736,32 @@ h1 em {
   align-items: center;
   gap: 16px;
 }
+.click-controls {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.click-controls small {
+  max-width: 180px;
+  color: #d99b83;
+}
+.click-volume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #859481;
+}
+.click-volume input {
+  width: 78px;
+  accent-color: var(--accent);
+}
+.click-volume span:last-child {
+  min-width: 31px;
+  text-align: right;
+  color: #b3c1ad;
+  font-variant-numeric: tabular-nums;
+}
 .speed select {
   padding: 4px 6px;
   font-size: 10px;

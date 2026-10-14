@@ -1,5 +1,6 @@
 import io
 import shutil
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -53,6 +54,73 @@ def upload(client):
     response = client.post("/api/tracks", files={"file": ("../guitar.wav", wav_bytes(), "audio/wav")})
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def test_beat_analysis_endpoint_persists_original_mix_grid(application):
+    app, client = application
+    track = upload(client)
+    calls = []
+    app.state.beat_jobs.available = lambda: True
+
+    def analyze(path, checkpoint):
+        calls.append((path, checkpoint))
+        return [0.01, 0.04, 0.08], [0.01]
+
+    app.state.beat_jobs.runner = analyze
+    response = client.post(f"/api/tracks/{track['id']}/beats")
+    assert response.status_code == 202
+    for _ in range(100):
+        result = client.get(f"/api/tracks/{track['id']}").json()
+        if result.get("beat_analysis", {}).get("status") == "ready":
+            break
+        time.sleep(0.01)
+    analysis = result["beat_analysis"]
+    assert calls[0][0] == app.state.store.directory(track["id"]) / "original.wav"
+    assert analysis["beats"] == [0.01, 0.04, 0.08]
+    assert analysis["downbeats"] == [0.01]
+    assert analysis["source"] == "original_mix"
+    assert analysis["time_signature"] == 4
+    assert analysis["time_signature_source"] == "default"
+    assert analysis["provider"] == "CPJKU/beat_this"
+    assert analysis["analysis_version"] == 1
+
+
+def test_beat_analysis_is_explicit_and_fails_without_fabricating_grid(application):
+    app, client = application
+    track = upload(client)
+    assert "beat_analysis" not in track
+    app.state.beat_jobs.available = lambda: False
+    unavailable = client.post(f"/api/tracks/{track['id']}/beats")
+    assert unavailable.status_code == 503
+    assert "not installed" in unavailable.json()["detail"]
+    persisted = client.get(f"/api/tracks/{track['id']}").json()
+    assert "beat_analysis" not in persisted
+
+    app.state.beat_jobs.available = lambda: True
+    app.state.beat_jobs.runner = lambda path, checkpoint: ([0.02], [0.02])
+    assert client.post(f"/api/tracks/{track['id']}/beats").status_code == 202
+    for _ in range(100):
+        persisted = client.get(f"/api/tracks/{track['id']}").json()
+        if persisted.get("beat_analysis", {}).get("status") == "error":
+            break
+        time.sleep(0.01)
+    assert "beats" not in persisted["beat_analysis"]
+    assert "enough beats" in persisted["beat_analysis"]["error"]
+
+
+def test_track_deletion_cancels_beat_analysis_before_removing_files(application, monkeypatch):
+    app, client = application
+    track = upload(client)
+    cancelled = []
+
+    async def cancel(track_id):
+        cancelled.append(track_id)
+
+    monkeypatch.setattr(app.state.beat_jobs, "cancel", cancel)
+    response = client.delete(f"/api/tracks/{track['id']}")
+    assert response.status_code == 204
+    assert cancelled == [track["id"]]
+    assert not app.state.store.directory(track["id"]).exists()
 
 
 def test_model_catalog_exposes_provider_terms_and_compatibility(application):

@@ -18,6 +18,7 @@ from starlette.datastructures import Headers
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from riffroom.audio import decode, waveform
+from riffroom.beats import BeatJobs
 from riffroom.jobs import ACTIVE, InvalidSeparationSource, Jobs
 from riffroom.models import MLX_PROVIDER, MODELS, PORTABLE_PROVIDER, catalog, clear_model_cache
 from riffroom.providers import is_provider_available
@@ -117,6 +118,7 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
     store = Store(data / "tracks")
     runtime = AudioSeparatorRuntime(data)
     jobs = Jobs(store, data / "models", runtime)
+    beat_jobs = BeatJobs(store)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -130,12 +132,24 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
                     error="The app stopped during separation. You can retry.",
                     message="Interrupted",
                 )
+            analysis = track.get("beat_analysis")
+            if isinstance(analysis, dict) and analysis.get("status") in ACTIVE:
+                store.update(
+                    track["id"],
+                    beat_analysis={
+                        "status": "error",
+                        "message": "Beat analysis did not finish",
+                        "error": "The app stopped during beat analysis. You can retry.",
+                    },
+                )
         yield
         await jobs.close()
+        await beat_jobs.close()
         await runtime.close()
 
     app = FastAPI(title="Riffroom", lifespan=lifespan)
-    app.state.store, app.state.jobs, app.state.audio_separator_runtime = store, jobs, runtime
+    app.state.store, app.state.jobs, app.state.beat_jobs = store, jobs, beat_jobs
+    app.state.audio_separator_runtime = runtime
     allowed_hosts = ["127.0.0.1", "localhost", "testserver"]
     bind_host = os.environ.get("RIFFROOM_BIND_HOST")
     if bind_host in {"0.0.0.0", "::"}:
@@ -176,6 +190,10 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
     @app.get("/api/runtimes/audio-separator")
     def audio_separator_runtime_status():
         return runtime.status()
+
+    @app.get("/api/runtimes/beat-tracking")
+    def beat_tracking_status():
+        return beat_jobs.status()
 
     @app.post("/api/runtimes/audio-separator/install", status_code=202)
     async def install_audio_separator_runtime():
@@ -283,6 +301,17 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
             raise HTTPException(409, str(exc)) from exc
         return store.get(track_id)
 
+    @app.post("/api/tracks/{track_id}/beats", status_code=202)
+    async def analyze_beats(track_id: str):
+        store.get(track_id)
+        try:
+            beat_jobs.start(track_id)
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return store.get(track_id)
+
     @app.put("/api/tracks/{track_id}/runs/{parent_id}/expansions/{stem_name}")
     def select_expansion(track_id: str, parent_id: str, stem_name: str, body: ExpansionRequest):
         with store.lock:
@@ -317,6 +346,7 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
     async def delete(track_id: str):
         store.get(track_id)
         await jobs.cancel(track_id)
+        await beat_jobs.cancel(track_id)
         shutil.rmtree(store.directory(track_id))
 
     @app.delete("/api/tracks/{track_id}/runs/{run_id}", status_code=204)
