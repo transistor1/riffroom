@@ -1,5 +1,6 @@
 import io
 import shutil
+import threading
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -39,6 +40,7 @@ def application(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app.state.jobs, "start", start)
     app.state.started = started
+    app.state.beat_jobs.available = lambda: False
     with TestClient(app) as client:
         yield app, client
 
@@ -56,9 +58,8 @@ def upload(client):
     return response.json()
 
 
-def test_beat_analysis_endpoint_persists_original_mix_grid(application):
+def test_import_automatically_persists_original_mix_grid(application):
     app, client = application
-    track = upload(client)
     calls = []
     app.state.beat_jobs.available = lambda: True
 
@@ -67,8 +68,8 @@ def test_beat_analysis_endpoint_persists_original_mix_grid(application):
         return [0.01, 0.04, 0.08], [0.01]
 
     app.state.beat_jobs.runner = analyze
-    response = client.post(f"/api/tracks/{track['id']}/beats")
-    assert response.status_code == 202
+    track = upload(client)
+    assert track["beat_analysis"]["status"] == "queued"
     for _ in range(100):
         result = client.get(f"/api/tracks/{track['id']}").json()
         if result.get("beat_analysis", {}).get("status") == "ready":
@@ -85,27 +86,95 @@ def test_beat_analysis_endpoint_persists_original_mix_grid(application):
     assert analysis["analysis_version"] == 1
 
 
-def test_beat_analysis_is_explicit_and_fails_without_fabricating_grid(application):
+def wait_for_beats(client, track_id, status):
+    for _ in range(200):
+        track = client.get(f"/api/tracks/{track_id}").json()
+        if track["beat_analysis"]["status"] == status:
+            return track
+        time.sleep(0.01)
+    pytest.fail(f"Beat analysis did not reach {status}: {track}")
+
+
+def test_missing_dependency_and_failed_analysis_require_manual_retry(application):
     app, client = application
     track = upload(client)
-    assert "beat_analysis" not in track
-    app.state.beat_jobs.available = lambda: False
-    unavailable = client.post(f"/api/tracks/{track['id']}/beats")
-    assert unavailable.status_code == 503
-    assert "not installed" in unavailable.json()["detail"]
-    persisted = client.get(f"/api/tracks/{track['id']}").json()
-    assert "beat_analysis" not in persisted
+    assert track["beat_analysis"]["status"] == "error"
+    assert "not installed" in track["beat_analysis"]["error"]
+    assert app.state.started  # Optional analysis never prevents separation.
+    assert client.get(f"/api/tracks/{track['id']}/original").status_code == 200
+    calls = []
+    app.state.beat_jobs.available = lambda: True
+
+    def fail(path, checkpoint):
+        calls.append(path)
+        return [0.02], [0.02]
+
+    app.state.beat_jobs.runner = fail
+    for _ in range(3):
+        assert client.post(f"/api/tracks/{track['id']}/beats/prepare").json() == track
+    assert calls == []
+    assert client.post(f"/api/tracks/{track['id']}/beats").status_code == 202
+    failed = wait_for_beats(client, track["id"], "error")
+    assert "beats" not in failed["beat_analysis"]
+    assert "enough beats" in failed["beat_analysis"]["error"]
+    for _ in range(3):
+        assert client.post(f"/api/tracks/{track['id']}/beats/prepare").json() == failed
+    assert len(calls) == 1
+
+
+def test_legacy_open_duplicate_requests_and_ready_analysis_are_idempotent(application):
+    app, client = application
+    track = upload(client)
+    track.pop("beat_analysis")
+    app.state.store.put(track)
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def analyze(path, checkpoint):
+        calls.append(path)
+        entered.set()
+        assert release.wait(5)
+        return [0.01, 0.04, 0.08], [0.01]
 
     app.state.beat_jobs.available = lambda: True
-    app.state.beat_jobs.runner = lambda path, checkpoint: ([0.02], [0.02])
-    assert client.post(f"/api/tracks/{track['id']}/beats").status_code == 202
-    for _ in range(100):
-        persisted = client.get(f"/api/tracks/{track['id']}").json()
-        if persisted.get("beat_analysis", {}).get("status") == "error":
-            break
-        time.sleep(0.01)
-    assert "beats" not in persisted["beat_analysis"]
-    assert "enough beats" in persisted["beat_analysis"]["error"]
+    app.state.beat_jobs.runner = analyze
+    try:
+        assert client.post(f"/api/tracks/{track['id']}/beats/prepare").json()["beat_analysis"]["status"] == "queued"
+        assert entered.wait(2)
+        for endpoint in ["beats/prepare", "beats", "beats/prepare"]:
+            assert client.post(f"/api/tracks/{track['id']}/{endpoint}").json()["beat_analysis"]["status"] == "processing"
+        assert client.get(f"/api/tracks/{track['id']}/original").status_code == 200
+        assert client.post(f"/api/tracks/{track['id']}/separate", json={"model_id": "demucs-6"}).status_code == 202
+        queued = upload(client)
+        assert queued["beat_analysis"]["status"] == "queued"
+        assert client.post(f"/api/tracks/{queued['id']}/beats/prepare").json()["beat_analysis"]["status"] == "queued"
+        assert len(calls) == 1
+    finally:
+        release.set()
+    wait_for_beats(client, queued["id"], "ready")
+    ready = wait_for_beats(client, track["id"], "ready")
+    for endpoint in ["beats/prepare", "beats"]:
+        assert client.post(f"/api/tracks/{track['id']}/{endpoint}").json() == ready
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("status", ["queued", "processing", "ready", "error"])
+def test_restart_preserves_attempt_and_requires_retry_for_interruption(tmp_path, status):
+    app = create_app(tmp_path, tmp_path / "no-frontend")
+    tid = uuid4().hex
+    analysis = {"status": status, "error": None}
+    app.state.store.put({"id": tid, "status": "idle", "runs": [], "created_at": "now",
+                         "beat_analysis": analysis})
+    app.state.beat_jobs.available = lambda: True
+    app.state.beat_jobs.runner = lambda *_: pytest.fail("Restart must not rerun inference")
+    with TestClient(app) as client:
+        persisted = client.post(f"/api/tracks/{tid}/beats/prepare").json()["beat_analysis"]
+        if status in {"queued", "processing"}:
+            assert persisted["status"] == "error"
+            assert "app stopped" in persisted["error"]
+        else:
+            assert persisted == analysis
+        assert client.post(f"/api/tracks/{tid}/beats/prepare").json()["beat_analysis"] == persisted
 
 
 def test_track_deletion_cancels_beat_analysis_before_removing_files(application, monkeypatch):

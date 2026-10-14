@@ -78,3 +78,9 @@ describe("beat-grid click planning", () => {
     expect(countInClicks(null, 3, 2)).toEqual([]);
   });
 });
+
+it("does not extrapolate pulses inside an abstained detector gap", () => {
+  const irregular = { beats: [0, 0.5, 1, 1.5, 3.01, 3.5, 4, 4.5, 5],
+    downbeats: [0, 3.01, 5], time_signature: 4 };
+  expect(countInClicks(irregular, 3.01, 1).map(click => click.songTime)).toEqual([0, 0.5, 1, 1.5]);
+});

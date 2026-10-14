@@ -18,6 +18,7 @@ from starlette.datastructures import Headers
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from riffroom.audio import decode, waveform
+from riffroom.beat_grid_prototype import propose_correction
 from riffroom.beats import BeatJobs
 from riffroom.jobs import ACTIVE, InvalidSeparationSource, Jobs
 from riffroom.models import MLX_PROVIDER, MODELS, PORTABLE_PROVIDER, catalog, clear_model_cache
@@ -275,6 +276,7 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
             )
             source.unlink()
             jobs.start(track_id, model_id)
+            beat_jobs.start(track_id)
             return store.get(track_id)
         except BaseException as exc:
             shutil.rmtree(folder, ignore_errors=True)
@@ -301,15 +303,40 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
             raise HTTPException(409, str(exc)) from exc
         return store.get(track_id)
 
+    @app.get("/api/tracks/{track_id}/beats/correction")
+    def beat_correction(track_id: str):
+        """Ephemeral proposal from stored analysis; no inference or manifest writes."""
+        analysis = store.get(track_id).get("beat_analysis")
+        if not analysis or analysis.get("status") != "ready":
+            raise HTTPException(409, "Stored ready beat analysis is required for correction.")
+        if analysis.get("provider") != "CPJKU/beat_this":
+            raise HTTPException(409, "Experimental correction requires stored Beat This! analysis.")
+        try:
+            report = propose_correction(
+                analysis["beats"], analysis["downbeats"], analysis["time_signature"],
+                source_provenance=analysis,
+            )
+        except Exception as exc:
+            # Fail explicitly; never publish a raw grid disguised as a repair.
+            raise HTTPException(422, "Experimental beat correction failed for this stored analysis.") from exc
+        proposal = report["proposal"]
+        return {
+            "status": "applied" if proposal["accepted_repairs"] else "no_confident_repair",
+            "source_analysis": analysis,
+            "grid": {"beats": proposal["beats"], "downbeats": proposal["downbeats"],
+                     "time_signature": analysis["time_signature"]},
+            "report": report,
+        }
+
+    @app.post("/api/tracks/{track_id}/beats/prepare", status_code=202)
+    async def prepare_beats(track_id: str):
+        # Opening a legacy track is idempotent, including across reloads and failures.
+        beat_jobs.start(track_id)
+        return store.get(track_id)
+
     @app.post("/api/tracks/{track_id}/beats", status_code=202)
     async def analyze_beats(track_id: str):
-        store.get(track_id)
-        try:
-            beat_jobs.start(track_id)
-        except RuntimeError as exc:
-            raise HTTPException(503, str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from exc
+        beat_jobs.start(track_id, retry=True)
         return store.get(track_id)
 
     @app.put("/api/tracks/{track_id}/runs/{parent_id}/expansions/{stem_name}")

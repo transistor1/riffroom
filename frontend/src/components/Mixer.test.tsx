@@ -19,6 +19,7 @@ import Mixer, {
   transitionPerformanceShortcut,
 } from "./Mixer";
 import type { MixerEngine } from "../audio";
+import { correctionPreferenceKey } from "../beatCorrection";
 
 const stem = (name: string, runId: string): Stem => ({
   name,
@@ -822,4 +823,53 @@ describe("effective chained mixer", () => {
     expect(setMaster).not.toHaveBeenCalled();
     expect(setLoopPlan).not.toHaveBeenCalled();
   });
+});
+
+describe("compact beat correction controls", () => {
+  for (const enabled of [false, true]) {
+    it(`exposes pending details without visible status copy when correction is ${enabled ? "on" : "off"}`, () => {
+      const project = track([]);
+      project.beat_analysis = {
+        status: "ready", message: "", error: null,
+        beats: [0, 0.5, 1, 1.5], downbeats: [0], time_signature: 4,
+      };
+      vi.stubGlobal("localStorage", {
+        getItem: (key: string) => key === correctionPreferenceKey(project.id) ? String(enabled) : null,
+        setItem: () => {},
+      });
+      try {
+        const html = renderToStaticMarkup(<Mixer track={project} />);
+        const button = html.match(/<button[^>]*>Beat correction<\/button>/)?.[0];
+        expect(button).toBeDefined();
+        expect(button).toContain(`aria-pressed="${enabled}"`);
+        expect(button).toContain(enabled ? 'class="small-button selected"' : 'class="small-button "');
+        expect(button).toContain(enabled
+          ? 'aria-description="Preparing correction; click and count-in unavailable. Turn correction off to use the source grid."'
+          : 'aria-description="Preparing correction; source grid in use."');
+        expect(button?.includes('disabled=""')).toBe(!enabled);
+        expect(html).not.toContain("EXPERIMENTAL beat correction");
+        expect(html).not.toContain('role="status"');
+        expect(html).not.toContain("Downbeats are preserved");
+        expect(html).not.toContain("Retry correction");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+  }
+});
+
+
+describe("automatic beat preparation controls", () => {
+  for (const status of [undefined, "queued", "processing", "error"] as const) {
+    it(`shows only relevant compact controls for ${status ?? "legacy"} analysis`, () => {
+      const project = track([]);
+      if (status) project.beat_analysis = { status, message: "", error: status === "error" ? "Install beat tracking, then Retry." : null };
+      const html = renderToStaticMarkup(<Mixer track={project} />);
+      expect(html).not.toContain("Analyze beats");
+      expect(html.includes('aria-label="Retry beat analysis"')).toBe(status === "error");
+      expect(html.includes("Beats queued…")).toBe(status === "queued");
+      expect(html.includes("Analyzing beats…")).toBe(status === "processing");
+      expect(html).not.toContain("Beat correction");
+    });
+  }
 });

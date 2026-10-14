@@ -66,7 +66,10 @@ export function countInClicks(
     // synthetic grid is actually before the requested, unchanged playhead.
     while (cursor >= position - 1e-7) cursor -= interval;
     times.push(cursor);
-  } else {
+  } else if (insertion < 0) {
+    // Only extrapolate beyond the detected grid. Within it, quantization or an
+    // abstained irregular gap must not create an extra count-in pulse just
+    // before a real beat (or independently "repair" the detector's timing).
     while (cursor + interval < position - 1e-7) {
       cursor += interval;
       times.push(cursor);

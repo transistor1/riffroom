@@ -314,7 +314,12 @@ export class MixerEngine {
         this.clickAt,
         this.clickOffset,
       );
-      this.clickAt += (songEnd - this.clickOffset) / this.rate;
+      // A completed lookahead window must land on its exact audio-clock horizon.
+      // Round-tripping through a large song offset can leave clickAt just below
+      // it, with the remaining song-time delta rounding to zero forever.
+      this.clickAt = songEnd < end
+        ? horizon
+        : this.clickAt + (songEnd - this.clickOffset) / this.rate;
       this.clickOffset = songEnd;
     }
   }

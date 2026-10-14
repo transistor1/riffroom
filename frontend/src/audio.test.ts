@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import easyLover from "../../backend/tests/fixtures/easy_lover_approved_groove.json";
+import easyLoverCorrection from "../../backend/tests/fixtures/easy_lover_correction.json";
+import { countInClicks, gridClicksBetween } from "./beatGrid";
+import { selectedClickGrid, type BeatCorrection } from "./beatCorrection";
 import {
   channelGain,
   clickGain,
@@ -43,13 +47,14 @@ const limiterNodes: any[] = [];
 // Capture module evaluation before any test can trigger a dynamic import.
 const eagerlyImportedSoundTouch = soundTouchMock.imported.mock.calls.length > 0;
 let clock: any;
+let decodedDuration = 10;
 class Context {
   currentTime = 0;
   destination = {};
   audioWorklet = { addModule: vi.fn(async () => {}) };
   resume = vi.fn(async () => {});
   close = vi.fn(async () => {});
-  decodeAudioData = vi.fn(async () => ({ duration: 10 }));
+  decodeAudioData = vi.fn(async () => ({ duration: decodedDuration }));
   constructor() {
     clock = this;
   }
@@ -64,6 +69,9 @@ class Context {
       connect: vi.fn((target: any) => target),
       disconnect: vi.fn(),
     };
+    node.gain.setTargetAtTime.mockImplementation((value: number) => {
+      node.gain.value = value;
+    });
     gainNodes.push(node);
     return node;
   }
@@ -122,6 +130,7 @@ const stems = Object.keys(mix).map((name) => ({
 }));
 
 beforeEach(() => {
+  decodedDuration = 10;
   nodes.length = 0;
   clickNodes.length = 0;
   gainNodes.length = 0;
@@ -701,4 +710,236 @@ it("formats and parses precise boundaries without whole-second rounding", () => 
   expect(parseTime(" 2.125 ")).toBe(2.125);
   for (const invalid of ["", "NaN", "Infinity", "1:60", "-1", "1:2:3"])
     expect(parseTime(invalid)).toBeNull();
+});
+
+it.each([0.5, 0.75, 0.9, 1, 1.1, 1.25])(
+  "counts into corrected Easy Lover with exact handoff at %s× through SoundTouch",
+  async (rate) => {
+    decodedDuration = 400;
+    const player = new MixerEngine();
+    await player.load(stems, new AbortController().signal);
+    const grid = easyLoverCorrection.grid;
+    const position = grid.beats[28]; // retained source index 38, corrected index 28
+    player.setClickOptions(grid, 1, true);
+    player.setRate(rate);
+    player.setPitch(3);
+    player.setClickVolume(1.4);
+    player.seek(position);
+    await player.play(true);
+    const planned = countInClicks(grid, position, 1);
+    expect(planned.map(click => click.songTime)).toEqual(grid.beats.slice(24, 28));
+    const handoff = 0.04 + (position - planned[0].songTime) / rate;
+    expect(nodes[0].start).toHaveBeenCalledWith(expect.closeTo(handoff), position);
+    const countInNodes = clickNodes.slice(0, 4);
+    expect(countInNodes.map(node => node.start.mock.calls[0][0])).toEqual(
+      planned.map(click => expect.closeTo(0.04 + (click.songTime - planned[0].songTime) / rate)),
+    );
+    countInNodes.forEach((node, i) => {
+      expect(node.frequency.value).toBeCloseTo(clickInputFrequency(planned[i].accent ? 1760 : 1175, rate, 3));
+      expect(node.connect.mock.calls[0][0].connect).toHaveBeenCalledWith(gainNodes[1]);
+    });
+    expect(gainNodes[1].gain.value).toBe(1.4);
+    expect(gainNodes[1].connect).toHaveBeenCalledWith(soundTouchMock.nodes[0]);
+    clock.currentTime = handoff - 0.1;
+    (player as any).schedule();
+    expect(clickNodes.filter(node => Math.abs(node.start.mock.calls[0][0] - handoff) < 1e-7)).toHaveLength(1);
+    player.dispose();
+  },
+);
+
+it("switches source/corrected grids live, cancels stale clicks, and preserves transport settings", async () => {
+  decodedDuration = 400;
+  const player = new MixerEngine();
+  await player.load(stems, new AbortController().signal);
+  const raw = easyLover.source_analysis;
+  const corrected = easyLoverCorrection.grid;
+  player.setRate(0.75);
+  player.setPitch(-2);
+  player.setClickVolume(1.5);
+  player.setClickOptions(raw, 1, true);
+  player.seek(5);
+  await player.play();
+  clock.currentTime = 0.5;
+  for (const grid of [corrected, raw]) {
+    const position = player.position();
+    const stale = [...clickNodes];
+    player.setClickOptions(grid, 1, true);
+    await vi.waitFor(() => expect(player.playing).toBe(true));
+    stale.forEach(node => expect(node.stop).toHaveBeenCalled());
+    expect(player.position()).toBeCloseTo(position);
+    const fresh = clickNodes.slice(stale.length);
+    const planned = gridClicksBetween(grid, position, position + 1.96 * 0.75);
+    expect(fresh.map(node => node.start.mock.calls[0][0])).toEqual(
+      planned.map(click => expect.closeTo(clock.currentTime + 0.04 + (click.songTime - position) / 0.75)),
+    );
+    expect(nodes.at(-1).playbackRate.value).toBe(0.75);
+    expect(gainNodes[1].gain.value).toBe(1.5);
+    expect(soundTouchMock.nodes.at(-1).pitchSemitones.value).toBe(-2);
+  }
+  player.dispose();
+});
+
+// A timeout cannot interrupt a synchronous infinite loop. Bound calls to the
+// real planner so a scheduler regression fails instead of hanging the runner.
+function guardClickScheduler(player: MixerEngine) {
+  const engine = player as any;
+  const plan = engine.scheduleGridClicks.bind(player);
+  const guard = vi.spyOn(engine, "scheduleGridClicks").mockImplementation((...args) => {
+    if (guard.mock.calls.length > 200) throw new Error("Click scheduler failed to advance");
+    return plan(...args);
+  });
+  return guard;
+}
+
+describe.each([false, true])("click seek with correction enabled=%s", correctionEnabled => {
+  const grid = selectedClickGrid(easyLover.source_analysis, correctionEnabled,
+    easyLoverCorrection as BeatCorrection)!;
+
+  it("terminates the previously stalled 100.123s lookahead and yields to timers", async () => {
+    decodedDuration = 400;
+    const player = new MixerEngine();
+    const guard = guardClickScheduler(player);
+    try {
+      await player.load(stems, new AbortController().signal);
+      player.setClickOptions(grid, 1, true);
+      player.seek(100.123);
+      await player.play();
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect((player as any).clickAt).toBe(2);
+      expect((player as any).clickOffset).toBeCloseTo(102.083);
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      expect(player.playing).toBe(true);
+    } finally {
+      player.dispose();
+    }
+  });
+
+  it("seeks into an abstained gap without synthesizing or replaying clicks", async () => {
+    decodedDuration = 400;
+    const player = new MixerEngine();
+    const guard = guardClickScheduler(player);
+    const sparse = { ...grid, beats: grid.beats.filter((_, i) => i < 80 || i >= 90) };
+    const target = grid.beats[84] + 0.123;
+    try {
+      await player.load(stems, new AbortController().signal);
+      player.setClickOptions(sparse, 1, true);
+      await player.play();
+      const stale = [...clickNodes];
+      guard.mockClear();
+      player.seek(target);
+      await vi.waitFor(() => expect(player.playing).toBe(true), { interval: 1 });
+      expect(player.position()).toBe(target);
+      expect(clickNodes).toHaveLength(stale.length);
+      clock.currentTime = grid.beats[90] - target;
+      guard.mockClear();
+      (player as any).schedule();
+      const planned = gridClicksBetween(sparse, target + clock.currentTime - 0.04,
+        target + clock.currentTime - 0.04 + 2);
+      expect(clickNodes.slice(stale.length).map(node => node.start.mock.calls[0][0])).toEqual(
+        planned.map(click => expect.closeTo(0.04 + click.songTime - target)),
+      );
+      (player as any).schedule();
+      expect(clickNodes).toHaveLength(stale.length + planned.length);
+    } finally {
+      player.dispose();
+    }
+  });
+
+  it.each([0.5, 0.75, 0.9, 1, 1.1, 1.25])(
+    "cancels stale clicks and schedules arbitrary live seeks exactly once at %s×",
+    async rate => {
+      decodedDuration = 400;
+      const player = new MixerEngine();
+      const guard = guardClickScheduler(player);
+      try {
+        await player.load(stems, new AbortController().signal);
+        player.setClickOptions(grid, 1, true);
+        player.setRate(rate);
+        await player.play(true);
+        const gap = (grid.beats[84] + grid.beats[85]) / 2;
+        for (const target of [100.123, grid.beats[28], gap, 0.25,
+          grid.beats.at(-1)! + 0.123, 399.99, 20.123, 0, 400]) {
+          clock.currentTime += 0.137;
+          const stale = [...clickNodes];
+          const sourceCount = nodes.length;
+          guard.mockClear();
+          player.seek(target);
+          await vi.waitFor(() => expect(player.playing).toBe(true), { interval: 1 });
+          const offset = target === 400 ? 0 : target;
+          expect(player.position()).toBe(offset);
+          stale.forEach(node => expect(node.stop).toHaveBeenCalledTimes(2));
+          const anchor = clock.currentTime + 0.04;
+          expect(nodes[sourceCount].start).toHaveBeenCalledWith(anchor, offset);
+          const planned = gridClicksBetween(grid, offset, Math.min(400, offset + 1.96 * rate));
+          const fresh = clickNodes.slice(stale.length);
+          expect(fresh.map(node => node.start.mock.calls[0][0])).toEqual(
+            planned.map(click => expect.closeTo(anchor + (click.songTime - offset) / rate)),
+          );
+          expect(guard.mock.calls.length).toBeLessThanOrEqual(1);
+          // An unchanged lookahead must neither create a burst nor repeat a beat.
+          (player as any).schedule();
+          expect(clickNodes).toHaveLength(stale.length + fresh.length);
+        }
+        const sourceCount = nodes.length;
+        player.setRate(rate === 1.25 ? 0.5 : 1.25);
+        await vi.waitFor(() => expect(player.playing).toBe(true), { interval: 1 });
+        expect(nodes[sourceCount].playbackRate.value).toBe(player.rate);
+        const previousCount = clickNodes.length;
+        clock.currentTime += 1000.123;
+        guard.mockClear();
+        (player as any).schedule();
+        expect(clickNodes.slice(previousCount).every(node => node.start.mock.calls[0][0] >= clock.currentTime)).toBe(true);
+        expect((player as any).clickAt).toBe(Infinity);
+      } finally {
+        player.dispose();
+      }
+    },
+  );
+
+  it("advances across loop boundaries, gap seeks and speed changes without click bursts", async () => {
+    decodedDuration = 400;
+    const player = new MixerEngine();
+    const guard = guardClickScheduler(player);
+    const beat = grid.beats[120];
+    const loops = [
+      { id: "a", name: "A", a: beat, b: beat + 0.5, enabled: true },
+      { id: "b", name: "B", a: 100.123, b: 100.673, enabled: true },
+    ];
+    try {
+      await player.load(stems, new AbortController().signal);
+      player.setClickOptions(grid, 1, true);
+      player.setLoopPlan(true, loops);
+      await player.play();
+      for (const rate of [0.5, 1.25, 0.9]) {
+        player.setRate(rate);
+        await vi.waitFor(() => expect(player.playing).toBe(true), { interval: 1 });
+        for (const target of [100.123, beat, beat + 0.125, beat + 0.5, 399.99]) {
+          const stale = [...clickNodes];
+          guard.mockClear();
+          player.seek(target);
+          await vi.waitFor(() => expect(player.playing).toBe(true), { interval: 1 });
+          const offset = target >= 100.673 ? beat : target === beat + 0.5 ? 100.123 : target;
+          expect(player.position()).toBe(offset);
+          stale.forEach(node => expect(node.stop).toHaveBeenCalledTimes(2));
+          const fresh = clickNodes.slice(stale.length);
+          const starts = fresh.map(node => node.start.mock.calls[0][0]);
+          expect(new Set(starts).size).toBe(starts.length);
+          expect(starts.every(at => at >= clock.currentTime + 0.04 && at < clock.currentTime + 2)).toBe(true);
+          expect(guard.mock.calls.length).toBeLessThan(10);
+          (player as any).schedule();
+          expect(clickNodes).toHaveLength(stale.length + fresh.length);
+          const beforeDelay = clickNodes.length;
+          clock.currentTime += 7200.063;
+          guard.mockClear();
+          (player as any).schedule();
+          expect(guard.mock.calls.length).toBeLessThan(10);
+          const resumed = clickNodes.slice(beforeDelay).map(node => node.start.mock.calls[0][0]);
+          expect(new Set(resumed).size).toBe(resumed.length);
+          expect(resumed.every(at => at >= clock.currentTime && at < clock.currentTime + 2)).toBe(true);
+        }
+      }
+    } finally {
+      player.dispose();
+    }
+  });
 });

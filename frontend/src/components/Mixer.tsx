@@ -25,6 +25,10 @@ import {
 import { api, loadPractice, savePractice } from "../api";
 import { DEFAULT_CLICK_VOLUME, MixerEngine } from "../audio";
 import {
+  loadCorrectionPreference, saveCorrectionPreference, selectedClickGrid,
+  validateCorrection, type BeatCorrection,
+} from "../beatCorrection";
+import {
   time,
   preciseTime,
   parseTime,
@@ -460,6 +464,10 @@ export default function Mixer({
   const [countInBars, setCountInBars] = useState(2);
   const [clickEnabled, setClickEnabled] = useState(false);
   const [clickVolume, setClickVolume] = useState(DEFAULT_CLICK_VOLUME);
+  const [correctionEnabled, setCorrectionEnabled] = useState(() => loadCorrectionPreference(track.id));
+  const [correction, setCorrection] = useState<{ key: string; result: BeatCorrection } | null>(null);
+  const [correctionError, setCorrectionError] = useState<{ key: string; message: string } | null>(null);
+  const [correctionRetry, setCorrectionRetry] = useState(0);
   const [loops, setLoops] = useState<PracticeLoop[]>(track.practice?.loops ?? []);
   const [loopMode, setLoopMode] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -492,12 +500,60 @@ export default function Mixer({
   const pending = useRef<PracticeLoop[] | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selected = loops.find(loop => loop.id === selectedId);
+  const [beatRequestError, setBeatRequestError] = useState("");
+  const [retryingBeats, setRetryingBeats] = useState(false);
   const beatAnalysis = track.beat_analysis;
-  const beatGrid = beatAnalysis?.status === "ready" && beatAnalysis.beats &&
+  useEffect(() => {
+    if (beatAnalysis?.status) {
+      setBeatRequestError("");
+      return;
+    }
+    const controller = new AbortController();
+    void api(`/tracks/${track.id}/beats/prepare`, { method: "POST", signal: controller.signal })
+      .catch(reason => {
+        if (!controller.signal.aborted) setBeatRequestError(`${reason.message} Reopen the song to retry beat preparation.`);
+      });
+    return () => controller.abort();
+  }, [track.id, beatAnalysis?.status]);
+  const rawBeatGrid = beatAnalysis?.status === "ready" && beatAnalysis.beats &&
     beatAnalysis.downbeats && beatAnalysis.time_signature
     ? { beats: beatAnalysis.beats, downbeats: beatAnalysis.downbeats,
         time_signature: beatAnalysis.time_signature }
     : null;
+  const sourceKey = `${track.id}:${JSON.stringify(beatAnalysis)}`;
+  const currentCorrection = correction?.key === sourceKey ? correction.result : null;
+  const currentCorrectionError = correctionError?.key === sourceKey ? correctionError.message : "";
+  const correctionDescription = currentCorrectionError
+    ? `Correction failed: ${currentCorrectionError} ${correctionEnabled
+      ? "Click and count-in unavailable; turn correction off or retry."
+      : "Source grid in use; retry available."}`
+    : !currentCorrection
+      ? correctionEnabled
+        ? "Preparing correction; click and count-in unavailable. Turn correction off to use the source grid."
+        : "Preparing correction; source grid in use."
+      : !correctionEnabled ? "Correction off; source grid in use."
+      : currentCorrection.status === "applied" ? "Beat repair applied."
+      : "No confident repair; source grid unchanged.";
+  const beatGrid = selectedClickGrid(rawBeatGrid, correctionEnabled, currentCorrection);
+  useEffect(() => {
+    setCorrectionEnabled(loadCorrectionPreference(track.id));
+  }, [track.id]);
+  useEffect(() => {
+    if (!rawBeatGrid || !beatAnalysis) return;
+    const controller = new AbortController();
+    setCorrectionError(null);
+    setCorrection(null);
+    void api<BeatCorrection>(`/tracks/${track.id}/beats/correction`, { signal: controller.signal })
+      .then(result => {
+        const validated = validateCorrection(result, beatAnalysis);
+        if (!controller.signal.aborted) setCorrection({ key: sourceKey, result: validated });
+      }).catch(reason => {
+        if (!controller.signal.aborted) setCorrectionError({ key: sourceKey, message: reason.message });
+      });
+    return () => controller.abort();
+    // A proposal belongs to a complete analysis snapshot, never a polling render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey, correctionRetry]);
   const beatKey = beatGrid
     ? `${beatGrid.beats.join(",")}|${beatGrid.downbeats.join(",")}|${beatGrid.time_signature}`
     : "none";
@@ -831,7 +887,7 @@ export default function Mixer({
           </div>
           <div className="playback-adjustments">
             <div className="click-controls" aria-label="Beat click controls">
-              {beatGrid ? <>
+              {rawBeatGrid ? <>
                 <label className="speed">Count-in{" "}<select value={countInBars}
                   onChange={event => setCountInBars(+event.target.value)}>
                   <option value={0}>Off</option>
@@ -851,17 +907,35 @@ export default function Mixer({
                     }} />
                   <span>{Math.round(clickVolume * 100)}%</span>
                 </label>
-              </> : <button className="small-button"
-                disabled={beatAnalysis?.status === "queued" || beatAnalysis?.status === "processing"}
-                onClick={() => {
-                  setError("");
-                  void api(`/tracks/${track.id}/beats`, { method: "POST" })
-                    .catch(reason => setError(reason.message));
-                }}>
-                {beatAnalysis?.status === "queued" || beatAnalysis?.status === "processing"
-                  ? "Analyzing beats…" : "Analyze beats"}
-              </button>}
-              {beatAnalysis?.status === "error" && <small role="status">{beatAnalysis.error}</small>}
+                <button className={`small-button ${correctionEnabled ? "selected" : ""}`}
+                  aria-pressed={correctionEnabled}
+                  title={correctionDescription}
+                  aria-description={correctionDescription}
+                  disabled={!correctionEnabled && !currentCorrection && !currentCorrectionError}
+                  onClick={() => {
+                    const enabled = !correctionEnabled;
+                    setCorrectionEnabled(enabled);
+                    saveCorrectionPreference(track.id, enabled);
+                  }}>Beat correction</button>
+                {currentCorrectionError && <button className="small-button"
+                  title={correctionDescription} aria-description={correctionDescription}
+                  onClick={() => setCorrectionRetry(value => value + 1)}>Retry correction</button>}
+              </> : <>
+                {(beatAnalysis?.status === "queued" || beatAnalysis?.status === "processing") &&
+                  <small role="status">{beatAnalysis.status === "queued" ? "Beats queued…" : "Analyzing beats…"}</small>}
+                {beatAnalysis?.status === "error" && <>
+                  <small role="status">{beatAnalysis.error || "Beat analysis failed. Retry when ready."}</small>
+                  <button className="small-button" disabled={retryingBeats}
+                    aria-label="Retry beat analysis" onClick={() => {
+                      setBeatRequestError("");
+                      setRetryingBeats(true);
+                      void api(`/tracks/${track.id}/beats`, { method: "POST" })
+                        .catch(reason => setBeatRequestError(reason.message))
+                        .finally(() => setRetryingBeats(false));
+                    }}>Retry</button>
+                </>}
+              </>}
+              {beatRequestError && <small role="status">{beatRequestError}</small>}
             </div>
             <label className="speed">
               Speed{" "}

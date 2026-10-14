@@ -80,15 +80,23 @@ class BeatJobs:
             "provider": "CPJKU/beat_this",
         }
 
-    def start(self, track_id: str) -> None:
+    def start(self, track_id: str, *, retry: bool = False) -> None:
+        """Persist one attempt; only an explicit retry may replace a failed attempt."""
         with self.store.lock:
-            if track_id in self.tasks:
-                raise ValueError("Beat analysis is already running for this track.")
             track = self.store.get(track_id)
+            analysis = track.get("beat_analysis") or {}
+            status = analysis.get("status")
+            if track_id in self.tasks or status in {"ready", "queued", "processing"}:
+                return
+            if status == "error" and not retry:
+                return
             if not self.available():
-                raise RuntimeError(
-                    "Beat tracking is not installed. Install Riffroom's beat optional dependency first."
-                )
+                self.store.update(track_id, beat_analysis={
+                    "status": "error",
+                    "message": "Beat analysis unavailable",
+                    "error": "Beat tracking is not installed. Install Riffroom's beat optional dependency, then Retry.",
+                })
+                return
             track["beat_analysis"] = {
                 "status": "queued",
                 "message": "Waiting to analyze the original mix",
