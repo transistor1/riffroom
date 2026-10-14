@@ -195,6 +195,76 @@ def test_reelin_original_grid_regression():
     assert len(result["proposal"]["deferred_regions"]) == 4
 
 
+def test_comfortably_numb_stored_duplicate_grid():
+    baseline = json.loads((FIXTURES / "comfortably_numb_duplicate_grid.json").read_text())
+    analysis = baseline["source_analysis"]
+    before = json.dumps(analysis)
+    result = propose_correction(analysis["beats"], analysis["downbeats"], analysis["time_signature"],
+                                source_provenance=analysis)
+    proposal = result["proposal"]
+    repairs = proposal["accepted_repairs"]
+    removed = {i for repair in repairs for i in repair["removed_source_indices"]}
+    assert removed == set(baseline["expected_removed_source_indices"])
+    assert len(repairs) == 23
+    assert all(repair["kind"] == "near_duplicate_detection_removal" for repair in repairs)
+    assert proposal["beats"] == [beat for i, beat in enumerate(analysis["beats"]) if i not in removed]
+    assert len(proposal["beats"]) == 434
+    window = [beat for beat in proposal["beats"] if 64.515 <= beat <= 124.459]
+    assert len(window) == 63
+    assert min(b - a for a, b in zip(window, window[1:])) > 0.8
+    assert {65.3, 70.98, 71.92, 73.82}.issubset(window)
+    # The isolated late-song pair has insufficient repeated local evidence.
+    assert {218.36, 218.44}.issubset(proposal["beats"])
+    assert proposal["downbeats"] == analysis["downbeats"]
+    assert result["source"]["provenance"] == analysis
+    assert json.dumps(analysis) == before
+    for beat, origin in zip(proposal["beats"], proposal["beat_origins"]):
+        assert origin["kind"] == "model"
+        assert beat == analysis["beats"][origin["source_index"]]
+    # Reapplying is stable; clean remaining timestamps are never regenerated.
+    assert propose_correction(proposal["beats"], proposal["downbeats"], 4)["proposal"]["beats"] == proposal["beats"]
+
+
+@pytest.mark.parametrize("period", [0.4, 0.94, 1.2])
+@pytest.mark.parametrize("offset_sign", [-1, 1])
+def test_duplicate_removal_preserves_exact_best_detection(period, offset_sign):
+    clean = [round(i * period, 5) for i in range(81)]
+    offset = min(0.08, period * 0.1) * offset_sign
+    beats = sorted(clean + [clean[i] + offset for i in (30, 32, 35)])
+    result = propose_correction(beats, clean[::4], 4)
+    assert result["proposal"]["beats"] == clean
+    assert len(result["proposal"]["accepted_repairs"]) == 3
+    assert result["proposal"]["downbeats"] == clean[::4]
+
+
+@pytest.mark.parametrize("scenario", [
+    "isolated", "equidistant", "subdivision", "triplets", "edge", "irregular", "tempo_change", "phase_change",
+])
+def test_duplicate_pass_abstains_on_weak_or_ambiguous_evidence(scenario):
+    clean = [float(i) for i in range(81)]
+    positions = (30, 32, 35)
+    if scenario == "isolated":
+        positions = (32,)
+    elif scenario == "edge":
+        positions = (0, 1, 2)
+    elif scenario == "irregular":
+        clean = [i + (0.2 if i % 2 else 0) for i in range(81)]
+    elif scenario == "tempo_change":
+        clean = [i if i < 33 else 33 + (i - 33) * 1.3 for i in range(81)]
+    elif scenario == "phase_change":
+        clean = [i if i < 33 else i + 0.2 for i in range(81)]
+    offset = 0.5 if scenario == "subdivision" else 0.08
+    beats = sorted(clean + [clean[i] + offset for i in positions])
+    if scenario == "triplets":
+        beats = sorted(beats + [clean[i] - offset for i in positions])
+    elif scenario == "equidistant":
+        beats = sorted([beat for beat in clean if beat not in positions] +
+                       [i + delta for i in positions for delta in (-0.04, 0.04)])
+    proposal = propose_correction(beats, [], 4)["proposal"]
+    assert proposal["beats"] == beats
+    assert proposal["accepted_repairs"] == []
+
+
 def test_reference_evaluation_does_not_force_pair_unequal_counts():
     import runpy
 

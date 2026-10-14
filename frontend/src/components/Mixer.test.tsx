@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
-import type { Mix, Model, Run, Stem, Track } from "../types";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BeatAnalysis, BeatGrid, Mix, Model, Run, Stem, Track } from "../types";
 import Mixer, {
   applyManualChannelChange,
   derivePerformanceParts,
@@ -19,7 +19,48 @@ import Mixer, {
   transitionPerformanceShortcut,
 } from "./Mixer";
 import type { MixerEngine } from "../audio";
-import { correctionPreferenceKey } from "../beatCorrection";
+import { correctionPreferenceKey, type BeatCorrection } from "../beatCorrection";
+
+// Exercise Mixer itself without a DOM or a React renderer. Only the preference,
+// correction request, and click-sync effects are stepped below. This checks real
+// closures/dependencies, not React's lifecycle, cleanup ordering, or remounts.
+const hookHarness = vi.hoisted(() => ({ current: null as any }));
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return {
+    ...actual,
+    useState: (initial: any) => {
+      const harness = hookHarness.current;
+      if (!harness) return actual.useState(initial);
+      const slot = harness.stateCursor++;
+      if (!(slot in harness.states)) {
+        harness.states[slot] = typeof initial === "function" ? initial() : initial;
+      }
+      return [harness.states[slot], (next: any) => {
+        harness.states[slot] = typeof next === "function" ? next(harness.states[slot]) : next;
+      }];
+    },
+    useRef: (initial: any) => {
+      const harness = hookHarness.current;
+      if (!harness) return actual.useRef(initial);
+      const slot = harness.refCursor++;
+      harness.refs[slot] ??= { current: slot === 0 ? harness.player : initial };
+      return harness.refs[slot];
+    },
+    useCallback: (callback: any, deps: any) => hookHarness.current
+      ? callback : actual.useCallback(callback, deps),
+    useEffect: (callback: any, deps: any) => {
+      const harness = hookHarness.current;
+      if (!harness) return actual.useEffect(callback, deps);
+      harness.effects.push({ callback, deps });
+    },
+  };
+});
+
+afterEach(() => {
+  hookHarness.current = null;
+  vi.unstubAllGlobals();
+});
 
 const stem = (name: string, runId: string): Stem => ({
   name,
@@ -872,4 +913,190 @@ describe("automatic beat preparation controls", () => {
       expect(html).not.toContain("Beat correction");
     });
   }
+});
+
+type CapturedEffect = { callback: () => void | (() => void); deps: unknown[] };
+
+function mixerClickHarness() {
+  const player = { setClickOptions: vi.fn() };
+  const harness = {
+    player, states: [] as any[], refs: [] as any[],
+    stateCursor: 0, refCursor: 0, effects: [] as CapturedEffect[],
+  };
+  const committed = new Map<string, { deps: unknown[]; cleanup?: () => void }>();
+  let tree: any;
+  return {
+    player,
+    render(project: Track) {
+      harness.stateCursor = harness.refCursor = 0;
+      harness.effects = [];
+      hookHarness.current = harness;
+      try { tree = Mixer({ track: project }); }
+      finally { hookHarness.current = null; }
+    },
+    step(name: string, match: (deps: unknown[]) => boolean) {
+      const effects = harness.effects.filter(effect => match(effect.deps));
+      expect(effects, `exactly one ${name} effect`).toHaveLength(1);
+      const effect = effects[0];
+      const previous = committed.get(name);
+      if (previous && effect.deps.length === previous.deps.length &&
+          effect.deps.every((dep, index) => Object.is(dep, previous.deps[index]))) return;
+      previous?.cleanup?.();
+      const cleanup = effect.callback();
+      committed.set(name, { deps: effect.deps, cleanup: cleanup || undefined });
+    },
+    sync() {
+      this.step("click sync", deps => deps.length === 3 &&
+        typeof deps[0] === "string" && typeof deps[1] === "number" && typeof deps[2] === "boolean");
+    },
+    request(project: Track) {
+      this.step("correction request", deps => deps.length === 2 &&
+        deps[0] === `${project.id}:${JSON.stringify(project.beat_analysis)}`);
+    },
+    preference(project: Track) {
+      // Preference precedes practice loading; both depend only on the song ID.
+      const effects = harness.effects.filter(effect => effect.deps.length === 1 && effect.deps[0] === project.id);
+      expect(effects).toHaveLength(2);
+      this.step("correction preference", deps => deps === effects[0].deps);
+    },
+    button(label: string) {
+      const buttons: any[] = [];
+      const visit = (node: any) => {
+        if (Array.isArray(node)) return node.forEach(visit);
+        if (!node?.props) return;
+        if (node.type === "button" && node.props.children === label) buttons.push(node);
+        visit(node.props.children);
+      };
+      visit(tree);
+      expect(buttons).toHaveLength(1);
+      return buttons[0].props;
+    },
+    click(label: string) {
+      const button = this.button(label);
+      expect(button.disabled).not.toBe(true);
+      button.onClick();
+    },
+  };
+}
+
+describe("Mixer beat-grid synchronization (stepped hooks, no DOM)", () => {
+  const raw: BeatGrid = {
+    beats: [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 3.5, 4],
+    downbeats: [0, 2, 4], time_signature: 4,
+  };
+  const corrected: BeatGrid = { ...raw, beats: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4] };
+  const song = (id = "song-a"): Track => ({
+    ...track([]), id,
+    beat_analysis: { ...raw, status: "ready", message: "", error: null, created_at: "first" },
+  });
+  const proposal = (project: Track): BeatCorrection => ({
+    status: "applied", source_analysis: project.beat_analysis as BeatAnalysis, grid: corrected,
+  });
+  function setup(enabled = false) {
+    const storage = memoryStorage();
+    storage.setItem(correctionPreferenceKey("song-a"), String(enabled));
+    vi.stubGlobal("localStorage", storage);
+    let resolve!: (response: Response) => void;
+    const response = new Promise<Response>(done => { resolve = done; });
+    const fetch = vi.fn(() => response);
+    vi.stubGlobal("fetch", fetch);
+    return { harness: mixerClickHarness(), storage, fetch, resolve };
+  }
+  async function deliver(
+    setupResult: ReturnType<typeof setup>, project: Track, selected: BeatGrid,
+  ) {
+    setupResult.resolve(Response.json(proposal(project)));
+    await vi.waitFor(() => {
+      setupResult.harness.render(project);
+      setupResult.harness.sync();
+      expect(setupResult.harness.player.setClickOptions).toHaveBeenLastCalledWith(selected, 2, false);
+      // With Raw selected the sync call is unchanged; the real UI description
+      // proves the async request closure has stored its validated proposal.
+      expect(setupResult.harness.button("Beat correction")["aria-description"])
+        .toBe(selected === corrected ? "Beat repair applied." : "Correction off; source grid in use.");
+    });
+  }
+
+  it("keeps Raw on a late response, then propagates explicit Auto/Raw changes", async () => {
+    const state = setup();
+    const project = song();
+    const { harness } = state;
+    harness.render(project);
+    harness.sync();
+    expect(harness.player.setClickOptions).toHaveBeenLastCalledWith(raw, 2, false);
+    harness.request(project);
+    expect(state.fetch).toHaveBeenCalledWith(`/api/tracks/${project.id}/beats/correction`, expect.anything());
+    await deliver(state, project, raw);
+    expect(harness.player.setClickOptions).toHaveBeenCalledTimes(1);
+    harness.click("Beat correction");
+    harness.render(project);
+    harness.sync();
+    expect(harness.player.setClickOptions).toHaveBeenLastCalledWith(corrected, 2, false);
+    expect(state.storage.getItem(correctionPreferenceKey(project.id))).toBe("true");
+    harness.click("Beat correction");
+    harness.render(project);
+    harness.sync();
+    expect(harness.player.setClickOptions).toHaveBeenLastCalledWith(raw, 2, false);
+    expect(state.storage.getItem(correctionPreferenceKey(project.id))).toBe("false");
+  });
+
+  it("propagates a late correction from pending silence without another user action", async () => {
+    const state = setup(true);
+    const project = song();
+    state.harness.render(project);
+    state.harness.sync();
+    expect(state.harness.player.setClickOptions).toHaveBeenLastCalledWith(null, 2, false);
+    state.harness.request(project);
+    await deliver(state, project, corrected);
+    expect(state.harness.player.setClickOptions).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse another song's proposal even with identical source analysis", async () => {
+    const state = setup(true);
+    const first = song();
+    state.harness.render(first);
+    state.harness.request(first);
+    await deliver(state, first, corrected);
+    const second = song("song-b");
+    state.harness.render(second);
+    state.harness.sync();
+    expect(state.harness.player.setClickOptions).toHaveBeenLastCalledWith(null, 2, false);
+    state.harness.preference(second);
+    state.harness.render(second);
+    state.harness.sync();
+    expect(state.harness.player.setClickOptions).toHaveBeenLastCalledWith(raw, 2, false);
+    expect(state.storage.getItem(correctionPreferenceKey(first.id))).toBe("true");
+    expect(state.storage.getItem(correctionPreferenceKey(second.id))).toBeNull();
+  });
+
+  it("invalidates a proposal when the same song's analysis snapshot changes", async () => {
+    const state = setup(true);
+    const project = song();
+    state.harness.render(project);
+    state.harness.request(project);
+    await deliver(state, project, corrected);
+    state.harness.render({ ...project, beat_analysis: { ...project.beat_analysis!, created_at: "replacement" } });
+    state.harness.sync();
+    expect(state.harness.player.setClickOptions).toHaveBeenLastCalledWith(null, 2, false);
+  });
+
+  it("ignores equivalent polling grids but propagates beat, accent, and meter changes", () => {
+    const { harness } = setup();
+    const project = song();
+    harness.render(project);
+    harness.sync();
+    harness.render({ ...project, beat_analysis: structuredClone(project.beat_analysis) });
+    harness.sync();
+    expect(harness.player.setClickOptions).toHaveBeenCalledTimes(1);
+    for (const change of [{ beats: corrected.beats }, { downbeats: [0, 3] }, { time_signature: 3 }]) {
+      project.beat_analysis = { ...project.beat_analysis!, ...change };
+      harness.render(project);
+      harness.sync();
+      expect(harness.player.setClickOptions).toHaveBeenLastCalledWith(
+        { beats: project.beat_analysis.beats, downbeats: project.beat_analysis.downbeats,
+          time_signature: project.beat_analysis.time_signature }, 2, false,
+      );
+    }
+    expect(harness.player.setClickOptions).toHaveBeenCalledTimes(4);
+  });
 });

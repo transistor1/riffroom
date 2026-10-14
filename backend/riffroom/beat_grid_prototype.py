@@ -231,6 +231,82 @@ def _clock(beats: list[float], start: int, end: int) -> tuple[float, float]:
     return period, residual
 
 
+def _duplicate_repairs(
+    beats: list[float], origins: list[dict], tolerance: float, phase_tolerance: float, anchor_intervals: int,
+) -> list[dict]:
+    """Remove only clearly off-clock members of repeated, isolated near-pairs.
+
+    Cluster midpoints establish cadence, never replacement timestamps. Only
+    singleton detections vote on phase, so duplicates cannot vote for themselves.
+    A short gap alone (including a legitimate subdivision) is insufficient.
+    """
+    intervals = _intervals(beats)
+    period = statistics.median(intervals)
+    limit = min(0.12, period * 0.15)
+    groups: list[list[int]] = []
+    for index, beat in enumerate(beats):
+        if groups and beat - beats[groups[-1][-1]] <= limit:
+            groups[-1].append(index)
+        else:
+            groups.append([index])
+    pairs = [i for i, group in enumerate(groups) if len(group) == 2]
+    centers = [statistics.mean(beats[i] for i in group) for group in groups]
+    # A whole-grid cadence must corroborate the local evidence. Do not apply a
+    # median-tempo filter to irregular grids or widespread ornamentation.
+    gaps = _intervals(centers)
+    if (len(pairs) < 3 or len(gaps) < anchor_intervals or
+            sum(abs(gap / period - 1) <= tolerance for gap in gaps) < 0.85 * len(gaps)):
+        return []
+
+    repairs = []
+    for position in pairs:
+        lo, hi = max(0, position - 12), min(len(groups), position + 13)
+        window = groups[lo:hi]
+        if (position - lo < 4 or hi - position - 1 < 4 or
+                sum(len(group) == 2 for group in window) < 3 or
+                any(len(group) > 2 for group in window) or
+                any(abs(gap / period - 1) > tolerance for gap in _intervals(centers[lo:hi]))):
+            continue
+        left = [i for i in range(lo, position) if len(groups[i]) == 1][-4:]
+        right = [i for i in range(position + 1, hi) if len(groups[i]) == 1][:4]
+        if len(left) < 2 or len(right) < 2:
+            continue
+        anchors = left + right
+        xmean = statistics.mean(anchors)
+        ymean = statistics.mean(centers[i] for i in anchors)
+        slope = sum((i - xmean) * (centers[i] - ymean) for i in anchors) / sum(
+            (i - xmean) ** 2 for i in anchors
+        )
+        def predict(i: int) -> float:
+            return ymean + (i - xmean) * slope
+
+        phase_limit = period * min(0.04, phase_tolerance)
+        if (abs(slope / period - 1) > tolerance or
+                max(abs(centers[i] - predict(i)) for i in anchors) > phase_limit):
+            continue
+        group = groups[position]
+        ranked = sorted(group, key=lambda i: abs(beats[i] - predict(position)))
+        keep, remove = ranked
+        error = abs(beats[keep] - predict(position))
+        advantage = abs(beats[remove] - predict(position)) - error
+        if error > phase_limit or advantage < period * 0.025:
+            continue
+        if any(origins[i]["kind"] != "model" for i in [*group, *(groups[j][0] for j in anchors)]):
+            continue
+        repairs.append({
+            "kind": "near_duplicate_detection_removal",
+            "time_start": beats[group[0]], "time_end": beats[group[-1]],
+            "preserved_source_index": origins[keep]["source_index"],
+            "removed_source_indices": [origins[remove]["source_index"]],
+            "anchor_source_indices": [origins[groups[i][0]]["source_index"] for i in anchors],
+            "anchor_period_seconds": slope,
+            "retained_phase_error_seconds": error,
+            "phase_advantage_seconds": advantage,
+            "confidence": "uncalibrated_structural_evidence",
+        })
+    return repairs
+
+
 def propose_correction(
     beats: list[float],
     downbeats: list[float],
@@ -244,7 +320,7 @@ def propose_correction(
     fit_intervals: int = 64,
     phase_tolerance: float = 0.08,
 ) -> dict:
-    """Propose local clock continuation; never enables playback or infers accents.
+    """Propose clock continuation or duplicate removal; never infers accents.
 
     Timestamp evidence alone cannot distinguish an isolated harmonic tracking
     error from a real half-time/subdivision passage. Those regions are deferred.
@@ -252,6 +328,8 @@ def propose_correction(
     on both sides, including one long stable anchor. Stable off-phase plateaus
     inside that bounded uncertain span are not treated as trustworthy anchors.
     This is an empirical evidence gate, not a calibrated musical probability.
+    Separately, repeated near-pairs may lose one detection when a dominant
+    cadence and independent singleton phase anchors identify a clear survivor.
     """
     diagnostics = diagnose_beat_grid(beats, downbeats, time_signature)
     if not (0 < ratio_tolerance <= 0.15 and 0 < phase_tolerance <= 0.15):
@@ -364,8 +442,17 @@ def propose_correction(
     for start, end, interior, interior_origins in reversed(edits):
         corrected[start + 1 : end] = interior
         origins[start + 1 : end] = interior_origins
+    duplicate_repairs = _duplicate_repairs(
+        corrected, origins, ratio_tolerance, phase_tolerance, anchor_intervals,
+    )
+    removed = {index for repair in duplicate_repairs for index in repair["removed_source_indices"]}
+    retained = [(beat, origin) for beat, origin in zip(corrected, origins)
+                if origin.get("source_index") not in removed]
+    corrected = [beat for beat, _ in retained]
+    origins = [origin for _, origin in retained]
+    accepted.extend(duplicate_repairs)
     return {
-        "prototype_version": 2,
+        "prototype_version": 3,
         "policy": {
             "ratio_tolerance": ratio_tolerance, "phase_tolerance": phase_tolerance,
             "flank_size": flank_size, "anchor_intervals": anchor_intervals,
@@ -373,6 +460,7 @@ def propose_correction(
             "mode": "diagnostic_only; explicit invocation; no playback integration",
             "downbeat_policy": "preserve_only; do not infer accents",
             "ambiguous_harmonic_policy": "defer without independent musical evidence",
+            "duplicate_policy": "repeated near-pairs; dominant cadence; singleton phase advantage; removal only",
         },
         "source": {"beats": list(beats), "downbeats": list(downbeats),
                    "time_signature": time_signature, "provenance": deepcopy(source_provenance or {})},

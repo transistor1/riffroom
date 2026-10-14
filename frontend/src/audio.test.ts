@@ -1072,6 +1072,55 @@ it("switches source/corrected grids live, cancels stale clicks, and preserves tr
   player.dispose();
 });
 
+it.each([false, true])(
+  "uses the selected %s correction mode for a two-bar count-in and exact stem handoff",
+  async (enabled) => {
+    vi.useFakeTimers();
+    decodedDuration = 400;
+    const player = new MixerEngine();
+    try {
+      await player.load(stems, new AbortController().signal);
+      const raw = easyLover.source_analysis;
+      const result = easyLoverCorrection as BeatCorrection;
+      const grid = selectedClickGrid(raw, enabled, result)!;
+      const position = result.grid.beats[28];
+      // The same playhead is source index 38, corrected index 28. Assert the
+      // selected eight pulses directly, independently of countInClicks.
+      expect(raw.beats.indexOf(position)).toBe(38);
+      const expectedTimes = enabled ? grid.beats.slice(20, 28) : grid.beats.slice(30, 38);
+      const expectedAccents = enabled
+        ? [true, false, false, false, true, false, false, false]
+        : [false, false, true, false, false, false, true, false];
+      const rate = 0.75;
+      player.setRate(rate);
+      player.setClickOptions(grid, 2, true);
+      player.seek(position);
+      await player.play(true);
+      expect(clickNodes).toHaveLength(8);
+      clickNodes.forEach((node, index) => {
+        expect(node.start).toHaveBeenCalledWith(expect.closeTo(
+          0.04 + (expectedTimes[index] - expectedTimes[0]) / rate,
+        ));
+        expect(node.frequency.value).toBeCloseTo(clickInputFrequency(
+          expectedAccents[index] ? 1760 : 1175, rate, 0,
+        ));
+      });
+      const handoff = 0.04 + (position - expectedTimes[0]) / rate;
+      for (const node of nodes) {
+        expect(node.start).toHaveBeenCalledWith(expect.closeTo(handoff), position);
+      }
+      expect(nodes).toHaveLength(stems.length);
+      expect(player.position()).toBe(position);
+      clock.currentTime = handoff - 0.1;
+      vi.advanceTimersByTime(100);
+      expect(clickNodes.filter(node => Math.abs(node.start.mock.calls[0][0] - handoff) < 1e-7))
+        .toHaveLength(1);
+    } finally {
+      player.dispose();
+    }
+  },
+);
+
 // A timeout cannot interrupt a synchronous infinite loop. Bound calls to the
 // real planner so a scheduler regression fails instead of hanging the runner.
 function guardClickScheduler(player: MixerEngine) {

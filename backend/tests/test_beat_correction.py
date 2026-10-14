@@ -11,6 +11,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 @pytest.mark.parametrize("fixture,status", [
     ("easy_lover_approved_groove.json", "applied"),
     ("reelin_original_grid.json", "no_confident_repair"),
+    ("comfortably_numb_duplicate_grid.json", "applied"),
 ])
 def test_read_only_correction_from_stored_analysis(tmp_path, fixture, status):
     baseline = json.loads((FIXTURES / fixture).read_text())
@@ -39,7 +40,11 @@ def test_read_only_correction_from_stored_analysis(tmp_path, fixture, status):
         assert result["grid"]["downbeats"] == analysis["downbeats"]
         assert result["grid"]["time_signature"] == analysis["time_signature"]
         assert result["report"]["policy"]["downbeat_policy"] == "preserve_only; do not infer accents"
-        if status == "applied":
+        if fixture == "comfortably_numb_duplicate_grid.json":
+            removed = set(baseline["expected_removed_source_indices"])
+            assert result["grid"]["beats"] == [b for i, b in enumerate(analysis["beats"]) if i not in removed]
+            assert len(result["report"]["proposal"]["accepted_repairs"]) == 23
+        elif status == "applied":
             playback_fixture = json.loads((FIXTURES / "easy_lover_correction.json").read_text())
             assert result["grid"] == playback_fixture["grid"]
             beats = result["grid"]["beats"]

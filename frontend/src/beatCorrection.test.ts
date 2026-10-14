@@ -2,12 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import easyLover from "../../backend/tests/fixtures/easy_lover_approved_groove.json";
 import easyLoverCorrection from "../../backend/tests/fixtures/easy_lover_correction.json";
 import reelin from "../../backend/tests/fixtures/reelin_original_grid.json";
+import comfortablyNumb from "../../backend/tests/fixtures/comfortably_numb_duplicate_grid.json";
 import {
   correctionPreferenceKey, loadCorrectionPreference, saveCorrectionPreference,
   selectedClickGrid, validateCorrection, type BeatCorrection,
 } from "./beatCorrection";
 import { countInClicks, gridClicksBetween } from "./beatGrid";
-import type { BeatAnalysis } from "./types";
+import type { BeatAnalysis, BeatGrid } from "./types";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -58,5 +59,23 @@ describe("experimental per-song correction", () => {
     expect(() => validateCorrection({ ...result, grid: { ...result.grid, beats: [1, 0] } }, source)).toThrow();
     expect(() => validateCorrection({ ...result, grid: { ...result.grid, downbeats: [] } }, source)).toThrow();
     expect(() => validateCorrection({ ...result, grid: { ...result.grid, beats: [1, 2] } }, source)).toThrow();
+  });
+
+  it("accepts a removal-only duplicate proposal and preserves Raw and downbeat metadata", () => {
+    const source = comfortablyNumb.source_analysis as BeatAnalysis & BeatGrid;
+    const before = JSON.stringify(source);
+    const removed = new Set(comfortablyNumb.expected_removed_source_indices);
+    const grid = { ...source, beats: source.beats.filter((_, index) => !removed.has(index)) };
+    const result: BeatCorrection = { status: "applied", source_analysis: source, grid };
+    expect(validateCorrection(result, source)).toBe(result);
+    expect(selectedClickGrid(source, false, result)).toBe(source);
+    expect(selectedClickGrid(source, true, result)).toBe(grid);
+    const clicks = gridClicksBetween(grid, 64.515, 124.459);
+    expect(clicks).toHaveLength(63);
+    expect(clicks.some(click => click.songTime === 65.22)).toBe(false);
+    expect(clicks.some(click => click.songTime === 65.3)).toBe(true);
+    expect(clicks.find(click => click.songTime === 71.92)?.accent).toBe(true);
+    expect(grid.downbeats).toEqual(source.downbeats);
+    expect(JSON.stringify(source)).toBe(before);
   });
 });
