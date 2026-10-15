@@ -866,13 +866,14 @@ describe("effective chained mixer", () => {
   });
 });
 
-describe("compact beat correction controls", () => {
+describe("beat grid mode controls", () => {
   for (const enabled of [false, true]) {
-    it(`exposes pending details without visible status copy when correction is ${enabled ? "on" : "off"}`, () => {
+    it(`shows the sticky ${enabled ? "Auto" : "Raw"} mode and current grid status`, () => {
       const project = track([]);
       project.beat_analysis = {
         status: "ready", message: "", error: null,
         beats: [0, 0.5, 1, 1.5], downbeats: [0], time_signature: 4,
+        provider: "CPJKU/beat_this", model: "final0",
       };
       vi.stubGlobal("localStorage", {
         getItem: (key: string) => key === correctionPreferenceKey(project.id) ? String(enabled) : null,
@@ -880,18 +881,19 @@ describe("compact beat correction controls", () => {
       });
       try {
         const html = renderToStaticMarkup(<Mixer track={project} />);
-        const button = html.match(/<button[^>]*>Beat correction<\/button>/)?.[0];
-        expect(button).toBeDefined();
-        expect(button).toContain(`aria-pressed="${enabled}"`);
-        expect(button).toContain(enabled ? 'class="small-button selected"' : 'class="small-button "');
-        expect(button).toContain(enabled
-          ? 'aria-description="Preparing correction; click and count-in unavailable. Turn correction off to use the source grid."'
-          : 'aria-description="Preparing correction; source grid in use."');
-        expect(button?.includes('disabled=""')).toBe(!enabled);
+        expect(html).toContain("Metronome");
+        expect(html).toContain(enabled
+          ? "Grid: Auto · Preparing"
+          : "Grid: Raw · Override");
+        expect(html).toContain('aria-label="Beat grid mode"');
+        expect(html).toContain("Engine decision");
+        expect(html).toContain("Evaluating beat grid…");
+        expect(html).toContain("Source analysis");
+        expect(html).toContain("BeatThis");
+        expect(html).toContain("The Auto / Raw choice is remembered the next time you open this song.");
+        expect(html.match(new RegExp(`<button[^>]*aria-pressed="${enabled}"[^>]*>Auto</button>`))).not.toBeNull();
+        expect(html.match(new RegExp(`<button[^>]*aria-pressed="${!enabled}"[^>]*>Raw</button>`))).not.toBeNull();
         expect(html).not.toContain("EXPERIMENTAL beat correction");
-        expect(html).not.toContain('role="status"');
-        expect(html).not.toContain("Downbeats are preserved");
-        expect(html).not.toContain("Retry correction");
       } finally {
         vi.unstubAllGlobals();
       }
@@ -971,6 +973,20 @@ function mixerClickHarness() {
       expect(buttons).toHaveLength(1);
       return buttons[0].props;
     },
+    gridSummary() {
+      const summaries: any[] = [];
+      const visit = (node: any) => {
+        if (Array.isArray(node)) return node.forEach(visit);
+        if (!node?.props) return;
+        if (node.type === "summary" && node.props["aria-label"]?.startsWith("Beat grid:")) {
+          summaries.push(node);
+        }
+        visit(node.props.children);
+      };
+      visit(tree);
+      expect(summaries).toHaveLength(1);
+      return summaries[0].props;
+    },
     click(label: string) {
       const button = this.button(label);
       expect(button.disabled).not.toBe(true);
@@ -1012,8 +1028,10 @@ describe("Mixer beat-grid synchronization (stepped hooks, no DOM)", () => {
       expect(setupResult.harness.player.setClickOptions).toHaveBeenLastCalledWith(selected, 2, false);
       // With Raw selected the sync call is unchanged; the real UI description
       // proves the async request closure has stored its validated proposal.
-      expect(setupResult.harness.button("Beat correction")["aria-description"])
-        .toBe(selected === corrected ? "Beat repair applied." : "Correction off; source grid in use.");
+      const summary = setupResult.harness.gridSummary();
+      expect(summary["aria-label"])
+        .toBe(selected === corrected ? "Beat grid: Auto · Corrected" : "Beat grid: Raw · Override");
+      expect(summary.title).toContain("Correction applied");
     });
   }
 
@@ -1028,12 +1046,12 @@ describe("Mixer beat-grid synchronization (stepped hooks, no DOM)", () => {
     expect(state.fetch).toHaveBeenCalledWith(`/api/tracks/${project.id}/beats/correction`, expect.anything());
     await deliver(state, project, raw);
     expect(harness.player.setClickOptions).toHaveBeenCalledTimes(1);
-    harness.click("Beat correction");
+    harness.click("Auto");
     harness.render(project);
     harness.sync();
     expect(harness.player.setClickOptions).toHaveBeenLastCalledWith(corrected, 2, false);
     expect(state.storage.getItem(correctionPreferenceKey(project.id))).toBe("true");
-    harness.click("Beat correction");
+    harness.click("Raw");
     harness.render(project);
     harness.sync();
     expect(harness.player.setClickOptions).toHaveBeenLastCalledWith(raw, 2, false);
@@ -1051,22 +1069,25 @@ describe("Mixer beat-grid synchronization (stepped hooks, no DOM)", () => {
     expect(state.harness.player.setClickOptions).toHaveBeenCalledTimes(2);
   });
 
-  it("does not reuse another song's proposal even with identical source analysis", async () => {
+  it.each([false, true])("does not reuse another song's proposal with identical analysis (second song Auto: %s)", async (auto) => {
     const state = setup(true);
     const first = song();
     state.harness.render(first);
     state.harness.request(first);
     await deliver(state, first, corrected);
     const second = song("song-b");
+    if (!auto) state.storage.setItem(correctionPreferenceKey(second.id), "false");
     state.harness.render(second);
     state.harness.sync();
     expect(state.harness.player.setClickOptions).toHaveBeenLastCalledWith(null, 2, false);
     state.harness.preference(second);
     state.harness.render(second);
     state.harness.sync();
-    expect(state.harness.player.setClickOptions).toHaveBeenLastCalledWith(raw, 2, false);
+    expect(state.harness.player.setClickOptions).toHaveBeenLastCalledWith(auto ? null : raw, 2, false);
+    expect(state.harness.button("Auto")["aria-pressed"]).toBe(auto);
+    expect(state.harness.button("Raw")["aria-pressed"]).toBe(!auto);
     expect(state.storage.getItem(correctionPreferenceKey(first.id))).toBe("true");
-    expect(state.storage.getItem(correctionPreferenceKey(second.id))).toBeNull();
+    expect(state.storage.getItem(correctionPreferenceKey(second.id))).toBe(auto ? null : "false");
   });
 
   it("invalidates a proposal when the same song's analysis snapshot changes", async () => {

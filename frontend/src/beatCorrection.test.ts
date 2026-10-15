@@ -12,18 +12,18 @@ import type { BeatAnalysis, BeatGrid } from "./types";
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("experimental per-song correction", () => {
-  it("defaults off, remembers explicit choice per song across takes, and reverses", () => {
+describe("per-song beat correction mode", () => {
+  it("defaults to Auto, remembers explicit Raw/Auto choices per song across takes, and reverses", () => {
     const values = new Map<string, string>();
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => values.set(key, value),
     });
-    expect(loadCorrectionPreference("easy")).toBe(false);
+    expect(loadCorrectionPreference("easy")).toBe(true);
     saveCorrectionPreference("easy", true);
     expect(values.get(correctionPreferenceKey("easy"))).toBe("true");
     expect(loadCorrectionPreference("easy")).toBe(true);
-    expect(loadCorrectionPreference("reelin")).toBe(false);
+    expect(loadCorrectionPreference("reelin")).toBe(true);
     saveCorrectionPreference("easy", false);
     expect(loadCorrectionPreference("easy")).toBe(false);
   });

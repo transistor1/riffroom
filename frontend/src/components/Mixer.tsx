@@ -523,17 +523,49 @@ export default function Mixer({
   const sourceKey = `${track.id}:${JSON.stringify(beatAnalysis)}`;
   const currentCorrection = correction?.key === sourceKey ? correction.result : null;
   const currentCorrectionError = correctionError?.key === sourceKey ? correctionError.message : "";
-  const correctionDescription = currentCorrectionError
-    ? `Correction failed: ${currentCorrectionError} ${correctionEnabled
-      ? "Click and count-in unavailable; turn correction off or retry."
-      : "Source grid in use; retry available."}`
+  const engineDecision = currentCorrectionError
+    ? {
+        state: "error" as const,
+        label: "Correction unavailable",
+        detail: `Correction failed: ${currentCorrectionError}`,
+      }
     : !currentCorrection
-      ? correctionEnabled
-        ? "Preparing correction; click and count-in unavailable. Turn correction off to use the source grid."
-        : "Preparing correction; source grid in use."
-      : !correctionEnabled ? "Correction off; source grid in use."
-      : currentCorrection.status === "applied" ? "Beat repair applied."
-      : "No confident repair; source grid unchanged.";
+      ? {
+          state: "preparing" as const,
+          label: "Evaluating beat grid…",
+          detail: "RiffRoom is checking whether the source beat grid needs a confident repair.",
+        }
+      : currentCorrection.status === "applied"
+        ? {
+            state: "applied" as const,
+            label: "Correction applied",
+            detail: "The correction engine found a confident repair and adjusted the playback grid.",
+          }
+        : {
+            state: "raw" as const,
+            label: "Source grid kept",
+            detail: "No confident repair was found, so the source beat grid is unchanged.",
+          };
+  const gridStatus = !correctionEnabled
+    ? "Raw · Override"
+    : engineDecision.state === "applied"
+      ? "Auto · Corrected"
+      : engineDecision.state === "raw"
+        ? "Auto · Raw"
+        : engineDecision.state === "error"
+          ? "Auto · Error"
+          : "Auto · Preparing";
+  const playbackGridLabel = !correctionEnabled
+    ? "Raw (override)"
+    : engineDecision.state === "applied"
+      ? "Corrected"
+      : engineDecision.state === "raw"
+        ? "Raw"
+        : "Pending";
+  const sourceAnalysisLabel = beatAnalysis?.provider === "CPJKU/beat_this"
+    ? "BeatThis"
+    : beatAnalysis?.provider ?? "Beat analysis";
+  const correctionDescription = `Grid: ${gridStatus}. ${engineDecision.label}. ${engineDecision.detail}`;
   const beatGrid = selectedClickGrid(rawBeatGrid, correctionEnabled, currentCorrection);
   useEffect(() => {
     setCorrectionEnabled(loadCorrectionPreference(track.id));
@@ -891,8 +923,11 @@ export default function Mixer({
             {loopMode && !loops.some(loop => loop.enabled) && <small>Select at least one loop</small>}
           </div>
           <div className="playback-adjustments">
-            <div className="click-controls" aria-label="Beat click controls">
-              {rawBeatGrid ? <>
+            <div className="metronome-group" aria-label="Metronome controls">
+              <span className="metronome-label">Metronome</span>
+              {rawBeatGrid ? <div className="metronome-controls">
+                <button className={`small-button ${clickEnabled ? "selected" : ""}`}
+                  aria-pressed={clickEnabled} onClick={() => setClickEnabled(!clickEnabled)}>Click</button>
                 <label className="speed">Count-in{" "}<select value={countInBars}
                   onChange={event => setCountInBars(+event.target.value)}>
                   <option value={0}>Off</option>
@@ -900,8 +935,6 @@ export default function Mixer({
                     {bars} bar{bars === 1 ? "" : "s"}
                   </option>)}
                 </select></label>
-                <button className={`small-button ${clickEnabled ? "selected" : ""}`}
-                  aria-pressed={clickEnabled} onClick={() => setClickEnabled(!clickEnabled)}>Click</button>
                 <label className="click-volume">
                   <span>Click level</span>
                   <input aria-label="Click volume" type="range" min="0" max="2"
@@ -912,20 +945,63 @@ export default function Mixer({
                     }} />
                   <span>{Math.round(clickVolume * 100)}%</span>
                 </label>
-                <button className={`small-button ${correctionEnabled ? "selected" : ""}`}
-                  aria-pressed={correctionEnabled}
-                  title={correctionDescription}
-                  aria-description={correctionDescription}
-                  disabled={!correctionEnabled && !currentCorrection && !currentCorrectionError}
-                  onClick={() => {
-                    const enabled = !correctionEnabled;
-                    setCorrectionEnabled(enabled);
-                    saveCorrectionPreference(track.id, enabled);
-                  }}>Beat correction</button>
-                {currentCorrectionError && <button className="small-button"
-                  title={correctionDescription} aria-description={correctionDescription}
-                  onClick={() => setCorrectionRetry(value => value + 1)}>Retry correction</button>}
-              </> : <>
+                <details className="beat-grid-menu">
+                  <summary title={correctionDescription} aria-label={`Beat grid: ${gridStatus}`}>
+                    <span className={`beat-grid-status-dot ${!correctionEnabled ? "raw" : engineDecision.state}`} aria-hidden="true" />
+                    <span>Grid: {gridStatus}</span>
+                    <ChevronDown size={13} aria-hidden="true" />
+                  </summary>
+                  <div className="beat-grid-popover">
+                    <div className="beat-grid-heading">
+                      <strong>Beat grid</strong>
+                      <span>Controls how RiffRoom chooses the click grid for this song.</span>
+                    </div>
+                    <div className="beat-grid-mode-row">
+                      <div>
+                        <strong>Mode</strong>
+                        <small>Saved for this song</small>
+                      </div>
+                      <div className="beat-grid-segmented" role="group" aria-label="Beat grid mode">
+                        <button type="button" className={correctionEnabled ? "selected" : ""}
+                          aria-pressed={correctionEnabled} onClick={() => {
+                            setCorrectionEnabled(true);
+                            saveCorrectionPreference(track.id, true);
+                          }}>Auto</button>
+                        <button type="button" className={!correctionEnabled ? "selected" : ""}
+                          aria-pressed={!correctionEnabled} onClick={() => {
+                            setCorrectionEnabled(false);
+                            saveCorrectionPreference(track.id, false);
+                          }}>Raw</button>
+                      </div>
+                    </div>
+                    <p className="beat-grid-mode-help">
+                      {correctionEnabled
+                        ? "Auto lets RiffRoom decide whether a confident correction should be used."
+                        : "Raw bypasses correction and uses the original beat analysis for this song."}
+                    </p>
+                    <div className={`beat-grid-decision ${engineDecision.state}`}>
+                      <span>Engine decision</span>
+                      <strong>{engineDecision.label}</strong>
+                      <p>{engineDecision.detail}</p>
+                    </div>
+                    <dl className="beat-grid-facts">
+                      <div><dt>Playback grid</dt><dd>{playbackGridLabel}</dd></div>
+                      <div><dt>Source analysis</dt><dd>{sourceAnalysisLabel}</dd></div>
+                    </dl>
+                    {currentCorrectionError && <button className="small-button beat-grid-retry"
+                      title={correctionDescription} aria-description={correctionDescription}
+                      onClick={() => setCorrectionRetry(value => value + 1)}>Retry correction</button>}
+                    <details className="beat-grid-advanced">
+                      <summary>Advanced details</summary>
+                      <dl>
+                        <div><dt>Model</dt><dd>{beatAnalysis?.model ?? "Unknown"}</dd></div>
+                        <div><dt>Time signature</dt><dd>{beatAnalysis?.time_signature ? `${beatAnalysis.time_signature}/4` : "Unknown"}</dd></div>
+                      </dl>
+                    </details>
+                    <p className="beat-grid-remembered">The Auto / Raw choice is remembered the next time you open this song.</p>
+                  </div>
+                </details>
+              </div> : <div className="metronome-state">
                 {(beatAnalysis?.status === "queued" || beatAnalysis?.status === "processing") &&
                   <small role="status">{beatAnalysis.status === "queued" ? "Beats queued…" : "Analyzing beats…"}</small>}
                 {beatAnalysis?.status === "error" && <>
@@ -939,7 +1015,7 @@ export default function Mixer({
                         .finally(() => setRetryingBeats(false));
                     }}>Retry</button>
                 </>}
-              </>}
+              </div>}
               {beatRequestError && <small role="status">{beatRequestError}</small>}
             </div>
             <label className="speed">

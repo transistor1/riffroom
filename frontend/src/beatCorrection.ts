@@ -11,8 +11,11 @@ export const correctionPreferenceKey = (trackId: string) =>
   `riffroom:experimental-beat-correction:v1:${trackId}`;
 
 export function loadCorrectionPreference(trackId: string): boolean {
-  try { return localStorage.getItem(correctionPreferenceKey(trackId)) === "true"; }
-  catch { return false; }
+  try {
+    const stored = localStorage.getItem(correctionPreferenceKey(trackId));
+    return stored === null ? true : stored !== "false";
+  }
+  catch { return true; }
 }
 
 export function saveCorrectionPreference(trackId: string, enabled: boolean) {
