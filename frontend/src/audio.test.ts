@@ -562,6 +562,29 @@ it("keeps tempo and requested pitch independent", async () => {
   player.dispose();
 });
 
+it("uses preloaded song speed and fractional pitch on the first audible sources, then resets both", async () => {
+  const player = new MixerEngine();
+  player.setRate(0.75);
+  player.setPitch(-2.3);
+  expect(player.context).toBeNull();
+  await player.load(stems, new AbortController().signal);
+  expect(nodes).toHaveLength(0);
+  expect(soundTouchMock.nodes).toHaveLength(0);
+  await player.play();
+  expect(nodes.map(node => node.playbackRate.value)).toEqual([0.75, 0.75]);
+  expect(soundTouchMock.nodes[0].playbackRate.value).toBe(0.75);
+  expect(soundTouchMock.nodes[0].pitchSemitones.value).toBe(-2.3);
+
+  player.pause();
+  player.setRate(1);
+  player.setPitch(0);
+  await player.play();
+  expect(nodes.slice(-2).map(node => node.playbackRate.value)).toEqual([1, 1]);
+  expect(soundTouchMock.nodes.at(-1).playbackRate.value).toBe(1);
+  expect(soundTouchMock.nodes.at(-1).pitchSemitones.value).toBe(0);
+  player.dispose();
+});
+
 it("cannot restart after pause while the browser is resuming its audio context", async () => {
   const player = new MixerEngine();
   await player.load(stems, new AbortController().signal);

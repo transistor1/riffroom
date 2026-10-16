@@ -137,6 +137,33 @@ export function performancePartPreferenceKey(trackId: string): string {
 
 type PreferenceStorage = Pick<Storage, "getItem" | "setItem">;
 
+const playbackRates = [0.5, 0.75, 0.9, 1, 1.1, 1.25];
+type PlaybackPreference = { rate: number; pitch: number };
+const playbackPreferenceKey = (trackId: string) => `riffroom:playback:${trackId}`;
+
+function loadPlaybackPreference(trackId: string): PlaybackPreference {
+  const fallback = { rate: 1, pitch: 0 };
+  try {
+    const saved = JSON.parse(localStorage.getItem(playbackPreferenceKey(trackId)) ?? "null");
+    return {
+      rate: playbackRates.includes(saved?.rate) ? saved.rate : fallback.rate,
+      pitch: typeof saved?.pitch === "number" && Number.isFinite(saved.pitch) &&
+        saved.pitch >= -12 && saved.pitch <= 12
+        ? Math.round(saved.pitch * 10) / 10 : fallback.pitch,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function savePlaybackPreference(trackId: string, preference: PlaybackPreference) {
+  try {
+    localStorage.setItem(playbackPreferenceKey(trackId), JSON.stringify(preference));
+  } catch {
+    /* Keep the controls usable when storage is unavailable. */
+  }
+}
+
 export function chooseInitialPerformancePart(
   availableParts: string[],
 ): string | null {
@@ -458,9 +485,8 @@ export default function Mixer({
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const [master, setMaster] = useState(0.8);
-  const [rate, setRate] = useState(1);
-  const [pitch, setPitch] = useState(0);
-  const [pitchInput, setPitchInput] = useState("0.0");
+  const [{ rate, pitch }, setPlayback] = useState(() => loadPlaybackPreference(track.id));
+  const [pitchInput, setPitchInput] = useState(() => pitch.toFixed(1));
   const [countInBars, setCountInBars] = useState(2);
   const [clickEnabled, setClickEnabled] = useState(false);
   const [clickVolume, setClickVolume] = useState(DEFAULT_CLICK_VOLUME);
@@ -659,6 +685,9 @@ export default function Mixer({
   useEffect(() => {
     const player = new MixerEngine();
     engine.current = player;
+    // Seed the transport before loading audio, including on root-take remounts.
+    player.setRate(rate);
+    player.setPitch(pitch);
     // The syncing effect above runs before creation on mount; seed this engine too.
     player.setLoopPlan(loopMode, loops);
     player.setClickOptions(beatGrid, countInBars, clickEnabled);
@@ -767,7 +796,9 @@ export default function Mixer({
   }
   function applyPitch(value: number) {
     const next = Math.round(Math.max(-12, Math.min(12, value)) * 10) / 10;
-    setPitch(next);
+    const preference = { rate, pitch: next };
+    setPlayback(preference);
+    savePlaybackPreference(track.id, preference);
     setPitchInput(next.toFixed(1));
     engine.current?.setPitch(next);
   }
@@ -1024,11 +1055,13 @@ export default function Mixer({
                 value={rate}
                 onChange={(e) => {
                   const value = +e.target.value;
-                  setRate(value);
+                  const preference = { rate: value, pitch };
+                  setPlayback(preference);
+                  savePlaybackPreference(track.id, preference);
                   engine.current?.setRate(value);
                 }}
               >
-                {[0.5, 0.75, 0.9, 1, 1.1, 1.25].map((r) => (
+                {playbackRates.map((r) => (
                   <option key={r} value={r}>
                     {r}×
                   </option>

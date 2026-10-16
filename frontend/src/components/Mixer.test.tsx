@@ -18,11 +18,11 @@ import Mixer, {
   savePerformancePartPreference,
   transitionPerformanceShortcut,
 } from "./Mixer";
-import type { MixerEngine } from "../audio";
+import { MixerEngine } from "../audio";
 import { correctionPreferenceKey, type BeatCorrection } from "../beatCorrection";
 
-// Exercise Mixer itself without a DOM or a React renderer. Only the preference,
-// correction request, and click-sync effects are stepped below. This checks real
+// Exercise Mixer itself without a DOM or a React renderer. Selected effects
+// (including engine creation for playback preferences) are stepped below. This checks real
 // closures/dependencies, not React's lifecycle, cleanup ordering, or remounts.
 const hookHarness = vi.hoisted(() => ({ current: null as any }));
 vi.mock("react", async (importOriginal) => {
@@ -59,6 +59,7 @@ vi.mock("react", async (importOriginal) => {
 
 afterEach(() => {
   hookHarness.current = null;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -920,7 +921,7 @@ describe("automatic beat preparation controls", () => {
 type CapturedEffect = { callback: () => void | (() => void); deps: unknown[] };
 
 function mixerClickHarness() {
-  const player = { setClickOptions: vi.fn() };
+  const player = { setClickOptions: vi.fn(), setRate: vi.fn(), setPitch: vi.fn() };
   const harness = {
     player, states: [] as any[], refs: [] as any[],
     stateCursor: 0, refCursor: 0, effects: [] as CapturedEffect[],
@@ -929,17 +930,17 @@ function mixerClickHarness() {
   let tree: any;
   return {
     player,
-    render(project: Track) {
+    render(project: Track, run?: Run) {
       harness.stateCursor = harness.refCursor = 0;
       harness.effects = [];
       hookHarness.current = harness;
-      try { tree = Mixer({ track: project }); }
+      try { tree = Mixer({ track: project, run }); }
       finally { hookHarness.current = null; }
     },
-    step(name: string, match: (deps: unknown[]) => boolean) {
+    step(name: string, match: (deps: unknown[]) => boolean, occurrence = 0) {
       const effects = harness.effects.filter(effect => match(effect.deps));
-      expect(effects, `exactly one ${name} effect`).toHaveLength(1);
-      const effect = effects[0];
+      expect(effects, `${name} effects`).toHaveLength(occurrence + 1);
+      const effect = effects[occurrence];
       const previous = committed.get(name);
       if (previous && effect.deps.length === previous.deps.length &&
           effect.deps.every((dep, index) => Object.is(dep, previous.deps[index]))) return;
@@ -992,8 +993,139 @@ function mixerClickHarness() {
       expect(button.disabled).not.toBe(true);
       button.onClick();
     },
+    control(match: (node: any) => boolean) {
+      const matches: any[] = [];
+      const visit = (node: any) => {
+        if (Array.isArray(node)) return node.forEach(visit);
+        if (!node?.props) return;
+        if (match(node)) matches.push(node);
+        visit(node.props.children);
+      };
+      visit(tree);
+      expect(matches).toHaveLength(1);
+      return matches[0].props;
+    },
   };
 }
+
+describe("song playback preferences (stepped hooks, no DOM)", () => {
+  const key = (id: string) => `riffroom:playback:${id}`;
+  const song = (id = "song-a") => ({ ...track([]), id });
+  const speed = (h: ReturnType<typeof mixerClickHarness>) =>
+    h.control(node => node.type === "select" && node.props.children?.[0]?.type === "option");
+  const pitch = (h: ReturnType<typeof mixerClickHarness>) =>
+    h.control(node => node.props["aria-label"] === "Pitch");
+  const exactPitch = (h: ReturnType<typeof mixerClickHarness>) =>
+    h.control(node => node.props["aria-label"] === "Exact pitch in semitones");
+
+  function mount(project: Track, run?: Run) {
+    vi.stubGlobal("document", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    vi.stubGlobal("window", { setInterval: vi.fn(), clearInterval: vi.fn() });
+    const h = mixerClickHarness();
+    h.render(project, run);
+    h.step("engine creation", deps => deps.length === 0);
+    return h;
+  }
+
+  it("persists each song independently across remounts, original audio, and root takes", () => {
+    const storage = memoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    const rootA = root("root-a", ["guitar"]);
+    const rootB = root("root-b", ["vocals"]);
+    const a = { ...song(), runs: [rootA, rootB] };
+    const h = mixerClickHarness();
+    h.render(a, rootA);
+    speed(h).onChange({ target: { value: "0.75" } });
+    h.render(a, rootA);
+    pitch(h).onChange({ target: { value: "-2.3" } });
+    expect(JSON.parse(storage.getItem(key(a.id))!)).toEqual({ rate: 0.75, pitch: -2.3 });
+
+    const loadedPreferences: { rate: number; pitch: number }[] = [];
+    const load = vi.spyOn(MixerEngine.prototype, "load").mockImplementation(async function (this: MixerEngine) {
+      loadedPreferences.push({ rate: this.rate, pitch: this.pitchSemitones });
+    });
+    for (const run of [rootA, rootB, undefined]) {
+      const reopened = mount(a, run);
+      expect(speed(reopened).value).toBe(0.75);
+      expect(pitch(reopened).value).toBe(-2.3);
+      expect(exactPitch(reopened).value).toBe("-2.3");
+      // Mix preservation precedes graph loading; both depend on graphKey.
+      reopened.step("graph load", deps => deps.length === 1 && typeof deps[0] === "string" &&
+        deps[0].includes("/api/tracks/"), 1);
+    }
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(loadedPreferences).toEqual(Array(3).fill({ rate: 0.75, pitch: -2.3 }));
+    const b = song("song-b");
+    const other = mixerClickHarness();
+    other.render(b);
+    expect(speed(other).value).toBe(1);
+    expect(pitch(other).value).toBe(0);
+    pitch(other).onChange({ target: { value: "4.1" } });
+    const reopened = mixerClickHarness();
+    reopened.render(a, rootB);
+    expect(pitch(reopened).value).toBe(-2.3);
+    expect(JSON.parse(storage.getItem(key(b.id))!)).toEqual({ rate: 1, pitch: 4.1 });
+  });
+
+  it.each([
+    null, "{broken", "null", "[]", "42",
+    '{"rate":0.8,"pitch":13}', '{"rate":"0.75","pitch":"2.3"}',
+    '{"rate":1e999,"pitch":-1e999}',
+  ])("uses safe defaults for missing or corrupt preferences: %s", saved => {
+    const storage = memoryStorage();
+    if (saved !== null) storage.setItem(key("song-a"), saved);
+    vi.stubGlobal("localStorage", storage);
+    const setRate = vi.spyOn(MixerEngine.prototype, "setRate");
+    const setPitch = vi.spyOn(MixerEngine.prototype, "setPitch");
+    const h = mount(song());
+    expect(speed(h).value).toBe(1);
+    expect(exactPitch(h).value).toBe("0.0");
+    expect(setRate).toHaveBeenCalledWith(1);
+    expect(setPitch).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps controls and engine usable when storage reads and writes are blocked", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => { throw new Error("blocked"); },
+      setItem: () => { throw new Error("blocked"); },
+    });
+    const setRate = vi.spyOn(MixerEngine.prototype, "setRate");
+    const setPitch = vi.spyOn(MixerEngine.prototype, "setPitch");
+    const h = mount(song());
+    speed(h).onChange({ target: { value: "1.1" } });
+    h.render(song());
+    pitch(h).onChange({ target: { value: "0.1" } });
+    h.render(song());
+    expect(speed(h).value).toBe(1.1);
+    expect(exactPitch(h).value).toBe("0.1");
+    expect(setRate).toHaveBeenLastCalledWith(1.1);
+    expect(setPitch).toHaveBeenLastCalledWith(0.1);
+  });
+
+  it("persists exact pitch edits and explicit resets and seeds the next engine with zero", () => {
+    const storage = memoryStorage();
+    storage.setItem(key("song-a"), JSON.stringify({ rate: 0.5, pitch: 2.3 }));
+    vi.stubGlobal("localStorage", storage);
+    const setRate = vi.spyOn(MixerEngine.prototype, "setRate");
+    const setPitch = vi.spyOn(MixerEngine.prototype, "setPitch");
+    const h = mount(song());
+    exactPitch(h).onBlur({ target: { value: "3.14" } });
+    h.render(song());
+    expect(exactPitch(h).value).toBe("3.1");
+    expect(JSON.parse(storage.getItem(key("song-a"))!).pitch).toBe(3.1);
+    speed(h).onChange({ target: { value: "1" } });
+    h.render(song());
+    h.control(node => node.props["aria-label"] === "Reset pitch to zero").onClick();
+    expect(setRate).toHaveBeenLastCalledWith(1);
+    expect(setPitch).toHaveBeenLastCalledWith(0);
+    expect(JSON.parse(storage.getItem(key("song-a"))!)).toEqual({ rate: 1, pitch: 0 });
+    const reopened = mount(song());
+    expect(speed(reopened).value).toBe(1);
+    expect(exactPitch(reopened).value).toBe("0.0");
+    expect(setRate).toHaveBeenLastCalledWith(1);
+    expect(setPitch).toHaveBeenLastCalledWith(0);
+  });
+});
 
 describe("Mixer beat-grid synchronization (stepped hooks, no DOM)", () => {
   const raw: BeatGrid = {
