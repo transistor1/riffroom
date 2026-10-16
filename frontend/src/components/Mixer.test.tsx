@@ -18,7 +18,7 @@ import Mixer, {
   savePerformancePartPreference,
   transitionPerformanceShortcut,
 } from "./Mixer";
-import { MixerEngine } from "../audio";
+import { DEFAULT_CLICK_VOLUME, MixerEngine } from "../audio";
 import { correctionPreferenceKey, type BeatCorrection } from "../beatCorrection";
 
 // Exercise Mixer itself without a DOM or a React renderer. Selected effects
@@ -921,7 +921,7 @@ describe("automatic beat preparation controls", () => {
 type CapturedEffect = { callback: () => void | (() => void); deps: unknown[] };
 
 function mixerClickHarness() {
-  const player = { setClickOptions: vi.fn(), setRate: vi.fn(), setPitch: vi.fn() };
+  const player = { setClickOptions: vi.fn(), setClickVolume: vi.fn(), setRate: vi.fn(), setPitch: vi.fn() };
   const harness = {
     player, states: [] as any[], refs: [] as any[],
     stateCursor: 0, refCursor: 0, effects: [] as CapturedEffect[],
@@ -1012,7 +1012,7 @@ describe("song playback preferences (stepped hooks, no DOM)", () => {
   const key = (id: string) => `riffroom:playback:${id}`;
   const song = (id = "song-a") => ({ ...track([]), id });
   const speed = (h: ReturnType<typeof mixerClickHarness>) =>
-    h.control(node => node.type === "select" && node.props.children?.[0]?.type === "option");
+    h.control(node => node.props["aria-label"] === "Speed");
   const pitch = (h: ReturnType<typeof mixerClickHarness>) =>
     h.control(node => node.props["aria-label"] === "Pitch");
   const exactPitch = (h: ReturnType<typeof mixerClickHarness>) =>
@@ -1027,6 +1027,55 @@ describe("song playback preferences (stepped hooks, no DOM)", () => {
     return h;
   }
 
+  it("applies fine slider edits immediately, commits typed edits, clamps, and resets", () => {
+    const storage = memoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    const setRate = vi.spyOn(MixerEngine.prototype, "setRate");
+    const h = mount(song());
+    const exact = () => h.control(node => node.props["aria-label"] === "Exact playback speed");
+    expect(speed(h)).toMatchObject({ type: "range", min: 0.5, max: 1.25, step: "0.01" });
+    speed(h).onChange({ target: { value: "0.95" } });
+    h.render(song());
+    expect(exact().value).toBe("0.95");
+    expect(speed(h)["aria-valuetext"]).toBe("0.95x");
+    expect(setRate).toHaveBeenLastCalledWith(0.95);
+    for (const value of ["", "-", "garbage", "Infinity", "0.873"]) {
+      const calls = setRate.mock.calls.length;
+      exact().onChange({ target: { value } });
+      h.render(song());
+      expect(exact().value).toBe(value);
+      expect(speed(h).value).toBe(0.95);
+      expect(setRate).toHaveBeenCalledTimes(calls);
+      expect(JSON.parse(storage.getItem(key("song-a"))!).rate).toBe(0.95);
+    }
+    const preventDefault = vi.fn();
+    exact().onKeyDown({ key: "Enter", preventDefault, currentTarget: { value: "0.873" } });
+    h.render(song());
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(exact().value).toBe("0.87");
+    expect(setRate).toHaveBeenLastCalledWith(0.87);
+    for (const [value, expected] of [["0.1", 0.5], ["9", 1.25]] as const) {
+      exact().onBlur({ target: { value } });
+      h.render(song());
+      expect(speed(h).value).toBe(expected);
+      expect(setRate).toHaveBeenLastCalledWith(expected);
+    }
+    for (const value of ["", "invalid", "Infinity"]) {
+      const calls = setRate.mock.calls.length;
+      exact().onBlur({ target: { value } });
+      h.render(song());
+      expect(exact().value).toBe("1.25");
+      expect(setRate).toHaveBeenCalledTimes(calls);
+    }
+    pitch(h).onChange({ target: { value: "2.3" } });
+    h.render(song());
+    h.control(node => node.props["aria-label"] === "Reset speed to 1x").onClick();
+    h.render(song());
+    expect(exact().value).toBe("1.00");
+    expect(setRate).toHaveBeenLastCalledWith(1);
+    expect(JSON.parse(storage.getItem(key("song-a"))!)).toEqual({ rate: 1, pitch: 2.3 });
+  });
+
   it("persists each song independently across remounts, original audio, and root takes", () => {
     const storage = memoryStorage();
     vi.stubGlobal("localStorage", storage);
@@ -1035,10 +1084,10 @@ describe("song playback preferences (stepped hooks, no DOM)", () => {
     const a = { ...song(), runs: [rootA, rootB] };
     const h = mixerClickHarness();
     h.render(a, rootA);
-    speed(h).onChange({ target: { value: "0.75" } });
+    speed(h).onChange({ target: { value: "0.95" } });
     h.render(a, rootA);
     pitch(h).onChange({ target: { value: "-2.3" } });
-    expect(JSON.parse(storage.getItem(key(a.id))!)).toEqual({ rate: 0.75, pitch: -2.3 });
+    expect(JSON.parse(storage.getItem(key(a.id))!)).toEqual({ rate: 0.95, pitch: -2.3 });
 
     const loadedPreferences: { rate: number; pitch: number }[] = [];
     const load = vi.spyOn(MixerEngine.prototype, "load").mockImplementation(async function (this: MixerEngine) {
@@ -1046,7 +1095,7 @@ describe("song playback preferences (stepped hooks, no DOM)", () => {
     });
     for (const run of [rootA, rootB, undefined]) {
       const reopened = mount(a, run);
-      expect(speed(reopened).value).toBe(0.75);
+      expect(speed(reopened).value).toBe(0.95);
       expect(pitch(reopened).value).toBe(-2.3);
       expect(exactPitch(reopened).value).toBe("-2.3");
       // Mix preservation precedes graph loading; both depend on graphKey.
@@ -1054,7 +1103,7 @@ describe("song playback preferences (stepped hooks, no DOM)", () => {
         deps[0].includes("/api/tracks/"), 1);
     }
     expect(load).toHaveBeenCalledTimes(3);
-    expect(loadedPreferences).toEqual(Array(3).fill({ rate: 0.75, pitch: -2.3 }));
+    expect(loadedPreferences).toEqual(Array(3).fill({ rate: 0.95, pitch: -2.3 }));
     const b = song("song-b");
     const other = mixerClickHarness();
     other.render(b);
@@ -1069,7 +1118,7 @@ describe("song playback preferences (stepped hooks, no DOM)", () => {
 
   it.each([
     null, "{broken", "null", "[]", "42",
-    '{"rate":0.8,"pitch":13}', '{"rate":"0.75","pitch":"2.3"}',
+    '{"rate":0.49,"pitch":13}', '{"rate":"0.75","pitch":"2.3"}',
     '{"rate":1e999,"pitch":-1e999}',
   ])("uses safe defaults for missing or corrupt preferences: %s", saved => {
     const storage = memoryStorage();
@@ -1124,6 +1173,118 @@ describe("song playback preferences (stepped hooks, no DOM)", () => {
     expect(exactPitch(reopened).value).toBe("0.0");
     expect(setRate).toHaveBeenLastCalledWith(1);
     expect(setPitch).toHaveBeenLastCalledWith(0);
+  });
+});
+
+describe("global click preferences (stepped hooks, no DOM)", () => {
+  const countKey = "riffroom:count-in-bars";
+  const volumeKey = "riffroom:click-volume";
+  const song = (id = "song-a"): Track => ({
+    ...track([]), id,
+    beat_analysis: { status: "ready", message: "", error: null,
+      beats: [0, 0.5, 1, 1.5], downbeats: [0], time_signature: 4 },
+  });
+  const count = (h: ReturnType<typeof mixerClickHarness>) =>
+    h.control(node => node.props["aria-label"] === "Count-in bars");
+  const volume = (h: ReturnType<typeof mixerClickHarness>) =>
+    h.control(node => node.props["aria-label"] === "Click volume");
+  function mount(project: Track, run?: Run) {
+    vi.stubGlobal("document", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    vi.stubGlobal("window", { setInterval: vi.fn(), clearInterval: vi.fn() });
+    const h = mixerClickHarness();
+    h.render(project, run);
+    h.step("engine creation", deps => deps.length === 0);
+    return h;
+  }
+
+  it("shares count-in and level across songs and takes, seeds engines, and starts clicks off", () => {
+    const storage = memoryStorage();
+    const write = vi.spyOn(storage, "setItem");
+    vi.stubGlobal("localStorage", storage);
+    const setOptions = vi.spyOn(MixerEngine.prototype, "setClickOptions");
+    const setVolume = vi.spyOn(MixerEngine.prototype, "setClickVolume");
+    const first = song();
+    const h = mount(first);
+    expect(count(h).value).toBe(2);
+    expect(volume(h).value).toBe(DEFAULT_CLICK_VOLUME);
+    count(h).onChange({ target: { value: "4" } });
+    volume(h).onChange({ target: { value: "1.35" } });
+    h.click("Click");
+    h.render(first);
+    h.sync();
+    expect(h.button("Click")["aria-pressed"]).toBe(true);
+    expect(setOptions).toHaveBeenLastCalledWith(null, 4, true);
+    expect(setVolume).toHaveBeenLastCalledWith(1.35);
+    expect(write.mock.calls).toEqual([[countKey, "4"], [volumeKey, "1.35"]]);
+    const other = song("song-b");
+    for (const [project, take] of [[first, undefined], [other, undefined], [other, root("root-a", ["guitar"])]] as const) {
+      const reopened = mount(project, take);
+      expect(count(reopened).value).toBe(4);
+      expect(volume(reopened).value).toBe(1.35);
+      expect(reopened.button("Click")["aria-pressed"]).toBe(false);
+      expect(setOptions).toHaveBeenLastCalledWith(null, 4, false);
+      expect(setVolume).toHaveBeenLastCalledWith(1.35);
+    }
+    const second = mount(other);
+    count(second).onChange({ target: { value: "0" } });
+    volume(second).onChange({ target: { value: "0" } });
+    const reopened = mount(first);
+    expect(count(reopened).value).toBe(0);
+    expect(volume(reopened).value).toBe(0);
+    expect(setOptions).toHaveBeenLastCalledWith(null, 0, false);
+    expect(setVolume).toHaveBeenLastCalledWith(0);
+  });
+
+  it.each([null, "{broken", "null", "[]", "{}", '"2"', "true", "-1", "5", "1e999"])(
+    "defaults safely for malformed global preferences: %s", saved => {
+      const storage = memoryStorage();
+      if (saved !== null) {
+        storage.setItem(countKey, saved);
+        storage.setItem(volumeKey, saved);
+      }
+      vi.stubGlobal("localStorage", storage);
+      const setOptions = vi.spyOn(MixerEngine.prototype, "setClickOptions");
+      const setVolume = vi.spyOn(MixerEngine.prototype, "setClickVolume");
+      const h = mount(song());
+      expect(count(h).value).toBe(2);
+      expect(volume(h).value).toBe(DEFAULT_CLICK_VOLUME);
+      expect(setOptions).toHaveBeenLastCalledWith(null, 2, false);
+      expect(setVolume).toHaveBeenLastCalledWith(DEFAULT_CLICK_VOLUME);
+    },
+  );
+
+  it("validates each preference independently and rejects fractional count-in bars", () => {
+    const storage = memoryStorage();
+    storage.setItem(countKey, "1.5");
+    storage.setItem(volumeKey, "2");
+    vi.stubGlobal("localStorage", storage);
+    const h = mount(song());
+    expect(count(h).value).toBe(2);
+    expect(volume(h).value).toBe(2);
+  });
+
+  it("keeps click controls and engines usable when storage reads and writes throw", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => { throw new Error("blocked"); },
+      setItem: () => { throw new Error("blocked"); },
+    });
+    const setOptions = vi.spyOn(MixerEngine.prototype, "setClickOptions");
+    const setVolume = vi.spyOn(MixerEngine.prototype, "setClickVolume");
+    const project = song();
+    const h = mount(project);
+    count(h).onChange({ target: { value: "1" } });
+    volume(h).onChange({ target: { value: "0.45" } });
+    h.click("Click");
+    h.render(project);
+    h.sync();
+    expect(count(h).value).toBe(1);
+    expect(volume(h).value).toBe(0.45);
+    expect(setOptions).toHaveBeenLastCalledWith(null, 1, true);
+    expect(setVolume).toHaveBeenLastCalledWith(0.45);
+    const reopened = mount(project);
+    expect(count(reopened).value).toBe(2);
+    expect(volume(reopened).value).toBe(DEFAULT_CLICK_VOLUME);
+    expect(reopened.button("Click")["aria-pressed"]).toBe(false);
   });
 });
 

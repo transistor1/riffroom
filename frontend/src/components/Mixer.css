@@ -1,0 +1,93 @@
+/* Keep practice controls compact while allowing each section to wrap independently. */
+.practice-controls .practice-adjustments {
+  display: grid;
+  flex: 1 1 100%;
+  min-width: 0;
+  gap: 8px;
+}
+
+.practice-adjustments .metronome-group,
+.practice-adjustments .playback-adjustments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #374239;
+  border-radius: 8px;
+  background: #202723;
+}
+
+.practice-adjustments .metronome-label,
+.practice-adjustments .playback-adjustments-label {
+  flex: 0 0 132px;
+  padding: 0;
+  border: 0;
+  color: #84927f;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+.practice-adjustments .metronome-controls,
+.practice-adjustments .metronome-state {
+  flex: 1 1 260px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.practice-adjustments .speed,
+.practice-adjustments .click-volume {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.practice-adjustments .playback-adjustment-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  flex: 1 1 260px;
+  min-width: 0;
+  gap: 8px 20px;
+}
+
+.practice-adjustments .pitch {
+  display: grid;
+  grid-template-columns: 32px minmax(24px, 1fr) 72px 14px 26px;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.practice-adjustments .pitch-slider {
+  width: 100%;
+  min-width: 0;
+}
+
+.practice-adjustments .pitch-value {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+  font-size: 12px;
+}
+
+.practice-adjustments .pitch-unit {
+  margin: 0;
+}
+
+.practice-adjustments .pitch-reset {
+  flex-shrink: 0;
+}
+
+@media (max-width: 620px) {
+  .practice-adjustments .metronome-label,
+  .practice-adjustments .playback-adjustments-label {
+    flex-basis: 100%;
+  }
+
+  .practice-adjustments .beat-grid-menu {
+    min-width: 0;
+    max-width: 100%;
+  }
+}

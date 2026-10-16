@@ -41,6 +41,7 @@ import {
   type Track,
 } from "../types";
 import Waveform from "./Waveform";
+import "./Mixer.css";
 
 const icons: Record<string, typeof Guitar> = {
   guitar: Guitar,
@@ -137,7 +138,31 @@ export function performancePartPreferenceKey(trackId: string): string {
 
 type PreferenceStorage = Pick<Storage, "getItem" | "setItem">;
 
-const playbackRates = [0.5, 0.75, 0.9, 1, 1.1, 1.25];
+const MIN_PLAYBACK_RATE = 0.5;
+const MAX_PLAYBACK_RATE = 1.25;
+const normalizeRate = (value: number) =>
+  Math.round(Math.max(MIN_PLAYBACK_RATE, Math.min(MAX_PLAYBACK_RATE, value)) * 100) / 100;
+
+// Browser-wide preferences deliberately have no song or take identifier.
+const countInPreferenceKey = "riffroom:count-in-bars";
+const clickVolumePreferenceKey = "riffroom:click-volume";
+
+function loadGlobalNumber(key: string, fallback: number, valid: (value: number) => boolean) {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(key) ?? "null");
+    return typeof value === "number" && Number.isFinite(value) && valid(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveGlobalNumber(key: string, value: number) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* Keep the controls usable when storage is unavailable. */
+  }
+}
 type PlaybackPreference = { rate: number; pitch: number };
 const playbackPreferenceKey = (trackId: string) => `riffroom:playback:${trackId}`;
 
@@ -146,7 +171,9 @@ function loadPlaybackPreference(trackId: string): PlaybackPreference {
   try {
     const saved = JSON.parse(localStorage.getItem(playbackPreferenceKey(trackId)) ?? "null");
     return {
-      rate: playbackRates.includes(saved?.rate) ? saved.rate : fallback.rate,
+      rate: typeof saved?.rate === "number" && Number.isFinite(saved.rate) &&
+        saved.rate >= MIN_PLAYBACK_RATE && saved.rate <= MAX_PLAYBACK_RATE
+        ? normalizeRate(saved.rate) : fallback.rate,
       pitch: typeof saved?.pitch === "number" && Number.isFinite(saved.pitch) &&
         saved.pitch >= -12 && saved.pitch <= 12
         ? Math.round(saved.pitch * 10) / 10 : fallback.pitch,
@@ -486,10 +513,13 @@ export default function Mixer({
   const [position, setPosition] = useState(0);
   const [master, setMaster] = useState(0.8);
   const [{ rate, pitch }, setPlayback] = useState(() => loadPlaybackPreference(track.id));
+  const [rateInput, setRateInput] = useState(() => rate.toFixed(2));
   const [pitchInput, setPitchInput] = useState(() => pitch.toFixed(1));
-  const [countInBars, setCountInBars] = useState(2);
+  const [countInBars, setCountInBars] = useState(() =>
+    loadGlobalNumber(countInPreferenceKey, 2, value => Number.isInteger(value) && value >= 0 && value <= 4));
   const [clickEnabled, setClickEnabled] = useState(false);
-  const [clickVolume, setClickVolume] = useState(DEFAULT_CLICK_VOLUME);
+  const [clickVolume, setClickVolume] = useState(() =>
+    loadGlobalNumber(clickVolumePreferenceKey, DEFAULT_CLICK_VOLUME, value => value >= 0 && value <= 2));
   const [correctionEnabled, setCorrectionEnabled] = useState(() => loadCorrectionPreference(track.id));
   const [correction, setCorrection] = useState<{ key: string; result: BeatCorrection } | null>(null);
   const [correctionError, setCorrectionError] = useState<{ key: string; message: string } | null>(null);
@@ -794,6 +824,20 @@ export default function Mixer({
     engine.current?.seek(next);
     setPosition(next);
   }
+  function applyRate(value: number) {
+    if (!Number.isFinite(value)) return;
+    const next = normalizeRate(value);
+    const preference = { rate: next, pitch };
+    setPlayback(preference);
+    savePlaybackPreference(track.id, preference);
+    setRateInput(next.toFixed(2));
+    engine.current?.setRate(next);
+  }
+  function commitRateInput(value: string) {
+    const next = value.trim() ? Number(value) : NaN;
+    if (Number.isFinite(next)) applyRate(next);
+    else setRateInput(rate.toFixed(2));
+  }
   function applyPitch(value: number) {
     const next = Math.round(Math.max(-12, Math.min(12, value)) * 10) / 10;
     const preference = { rate, pitch: next };
@@ -953,14 +997,18 @@ export default function Mixer({
             <button className="small-button" onClick={addLoop} disabled={loops.length >= 50 || track.duration < 0.05}>Add loop</button>
             {loopMode && !loops.some(loop => loop.enabled) && <small>Select at least one loop</small>}
           </div>
-          <div className="playback-adjustments">
-            <div className="metronome-group" aria-label="Metronome controls">
+          <div className="practice-adjustments">
+            <div className="metronome-group" role="group" aria-label="Metronome controls">
               <span className="metronome-label">Metronome</span>
               {rawBeatGrid ? <div className="metronome-controls">
                 <button className={`small-button ${clickEnabled ? "selected" : ""}`}
                   aria-pressed={clickEnabled} onClick={() => setClickEnabled(!clickEnabled)}>Click</button>
                 <label className="speed">Count-in{" "}<select value={countInBars}
-                  onChange={event => setCountInBars(+event.target.value)}>
+                  aria-label="Count-in bars" onChange={event => {
+                    const value = +event.target.value;
+                    setCountInBars(value);
+                    saveGlobalNumber(countInPreferenceKey, value);
+                  }}>
                   <option value={0}>Off</option>
                   {[1, 2, 3, 4].map(bars => <option key={bars} value={bars}>
                     {bars} bar{bars === 1 ? "" : "s"}
@@ -972,6 +1020,7 @@ export default function Mixer({
                     step="0.05" value={clickVolume} onChange={event => {
                       const value = +event.target.value;
                       setClickVolume(value);
+                      saveGlobalNumber(clickVolumePreferenceKey, value);
                       engine.current?.setClickVolume(value);
                     }} />
                   <span>{Math.round(clickVolume * 100)}%</span>
@@ -1049,66 +1098,95 @@ export default function Mixer({
               </div>}
               {beatRequestError && <small role="status">{beatRequestError}</small>}
             </div>
-            <label className="speed">
-              Speed{" "}
-              <select
-                value={rate}
-                onChange={(e) => {
-                  const value = +e.target.value;
-                  const preference = { rate: value, pitch };
-                  setPlayback(preference);
-                  savePlaybackPreference(track.id, preference);
-                  engine.current?.setRate(value);
-                }}
-              >
-                {playbackRates.map((r) => (
-                  <option key={r} value={r}>
-                    {r}×
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="pitch">
-              <span>Pitch</span>
-              <input
-                className="pitch-slider"
-                aria-label="Pitch"
-                type="range"
-                min="-12"
-                max="12"
-                step="0.1"
-                value={pitch}
-                onChange={(e) => applyPitch(+e.target.value)}
-              />
-              <input
-                className="pitch-value"
-                aria-label="Exact pitch in semitones"
-                title="Exact pitch in semitones"
-                type="number"
-                inputMode="decimal"
-                min="-12"
-                max="12"
-                step="0.1"
-                value={pitchInput}
-                onChange={(e) => setPitchInput(e.target.value)}
-                onBlur={(e) => commitPitchInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    commitPitchInput(e.currentTarget.value);
-                  }
-                }}
-              />
-              <span className="pitch-unit">st</span>
-              <button
-                className="pitch-reset"
-                aria-label="Reset pitch to zero"
-                title="Reset pitch to zero"
-                type="button"
-                onClick={() => applyPitch(0)}
-              >
-                <RotateCcw size={13} />
-              </button>
+            <div className="playback-adjustments" role="group" aria-label="Playback adjustments">
+              <span className="playback-adjustments-label">Playback adjustments</span>
+              <div className="playback-adjustment-controls">
+                <div className="pitch">
+                  <span>Speed</span>
+                  <input
+                    className="pitch-slider"
+                    aria-label="Speed"
+                    aria-valuetext={`${rate.toFixed(2)}x`}
+                    type="range"
+                    min={MIN_PLAYBACK_RATE}
+                    max={MAX_PLAYBACK_RATE}
+                    step="0.01"
+                    value={rate}
+                    onChange={(e) => applyRate(+e.target.value)}
+                  />
+                  <input
+                    className="pitch-value"
+                    aria-label="Exact playback speed"
+                    title="Exact playback speed"
+                    type="number"
+                    inputMode="decimal"
+                    min={MIN_PLAYBACK_RATE}
+                    max={MAX_PLAYBACK_RATE}
+                    step="0.01"
+                    value={rateInput}
+                    onChange={(e) => setRateInput(e.target.value)}
+                    onBlur={(e) => commitRateInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        commitRateInput(e.currentTarget.value);
+                      }
+                    }}
+                  />
+                  <span className="pitch-unit">x</span>
+                  <button
+                    className="pitch-reset"
+                    aria-label="Reset speed to 1x"
+                    title="Reset speed to 1x"
+                    type="button"
+                    onClick={() => applyRate(1)}
+                  >
+                    <RotateCcw size={13} />
+                  </button>
+                </div>
+                <div className="pitch">
+                  <span>Pitch</span>
+                  <input
+                    className="pitch-slider"
+                    aria-label="Pitch"
+                    type="range"
+                    min="-12"
+                    max="12"
+                    step="0.1"
+                    value={pitch}
+                    onChange={(e) => applyPitch(+e.target.value)}
+                  />
+                  <input
+                    className="pitch-value"
+                    aria-label="Exact pitch in semitones"
+                    title="Exact pitch in semitones"
+                    type="number"
+                    inputMode="decimal"
+                    min="-12"
+                    max="12"
+                    step="0.1"
+                    value={pitchInput}
+                    onChange={(e) => setPitchInput(e.target.value)}
+                    onBlur={(e) => commitPitchInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        commitPitchInput(e.currentTarget.value);
+                      }
+                    }}
+                  />
+                  <span className="pitch-unit">st</span>
+                  <button
+                    className="pitch-reset"
+                    aria-label="Reset pitch to zero"
+                    title="Reset pitch to zero"
+                    type="button"
+                    onClick={() => applyPitch(0)}
+                  >
+                    <RotateCcw size={13} />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
