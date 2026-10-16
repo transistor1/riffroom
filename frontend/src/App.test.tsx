@@ -1,7 +1,15 @@
+import {
+  Children,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   deleteRunAndRefresh,
+  filterLibraryTracks,
+  TrackLibrary,
   mixerMountKey,
   PORTABLE_RUNTIME_POLL_MS,
   PortableRuntimeInstallProgress,
@@ -11,6 +19,25 @@ import {
   selectedRunFor,
 } from "./App";
 import type { RuntimeStatus, Track } from "./types";
+
+// Inspect library handlers without a DOM, as in the existing Mixer tests.
+const libraryHarness = vi.hoisted(() => ({
+  ref: null as null | { current: { focus: () => void } },
+}));
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return {
+    ...actual,
+    useRef: (initial: unknown) => libraryHarness.ref ?? actual.useRef(initial),
+  };
+});
+
+function libraryElements(node: ReactNode): ReactElement<any>[] {
+  return Children.toArray(node).flatMap((child) => {
+    if (!isValidElement<{ children?: ReactNode }>(child)) return [];
+    return [child, ...libraryElements(child.props.children)];
+  });
+}
 
 const runtimeStatus = (
   changes: Partial<RuntimeStatus> = {},
@@ -192,5 +219,149 @@ describe("mixer lifecycle", () => {
     expect(mixerMountKey(current.id, first)).toBe(before);
     expect(mixerMountKey(current.id, second)).not.toBe(before);
     expect(mixerMountKey(current.id)).toBe(`${current.id}:original`);
+  });
+});
+
+const libraryTracks: Array<Track & { artist?: string | null }> = [
+  {
+    ...trackWithRuns(),
+    id: "blue",
+    title: "Blue   Moon",
+    artist: "Ella Fitzgerald",
+  },
+  {
+    ...trackWithRuns(),
+    id: "sun",
+    title: "Here Comes the Sun",
+    artist: "The Beatles",
+  },
+  { ...trackWithRuns(), id: "moon", title: "Moon River", artist: null },
+  { ...trackWithRuns(), id: "legacy", title: "Legacy recording" },
+];
+
+const libraryProps = (query = "") => ({
+  tracks: libraryTracks,
+  query,
+  onQueryChange: vi.fn(),
+  selectedId: "blue",
+  importOpen: false,
+  selectTrack: vi.fn(),
+});
+
+describe("song library search", () => {
+  it("matches title and artist while preserving library order and data", () => {
+    const before = JSON.stringify(libraryTracks);
+    expect(filterLibraryTracks(libraryTracks, "moon").map((t) => t.id)).toEqual(
+      ["blue", "moon"],
+    );
+    expect(
+      filterLibraryTracks(libraryTracks, "beatles").map((t) => t.id),
+    ).toEqual(["sun"]);
+    expect(
+      filterLibraryTracks(libraryTracks, "blue ella").map((t) => t.id),
+    ).toEqual(["blue"]);
+    expect(JSON.stringify(libraryTracks)).toBe(before);
+  });
+
+  it.each(["", "   ", " \t\n "])(
+    "shows all songs for empty query %j",
+    (query) => {
+      expect(filterLibraryTracks(libraryTracks, query)).toBe(libraryTracks);
+    },
+  );
+
+  it("ignores case and extra whitespace in both the query and metadata", () => {
+    expect(
+      filterLibraryTracks(libraryTracks, "  bLuE \t MOON  ").map((t) => t.id),
+    ).toEqual(["blue"]);
+    expect(
+      filterLibraryTracks(libraryTracks, "  ELLA   fitzGERALD ").map(
+        (t) => t.id,
+      ),
+    ).toEqual(["blue"]);
+    expect(
+      filterLibraryTracks(libraryTracks, "legacy").map((t) => t.id),
+    ).toEqual(["legacy"]);
+  });
+
+  it("renders an accessible search and matching rows", () => {
+    const html = renderToStaticMarkup(
+      <TrackLibrary {...libraryProps("beatles")} />,
+    );
+    expect(html).toContain('<label for="library-search">Search songs</label>');
+    expect(html).toContain('type="search"');
+    expect(html).toContain('aria-label="Clear song search"');
+    expect(html).toContain("Here Comes the Sun");
+    expect(html).not.toContain("Moon River");
+    expect(html).not.toContain("No songs match");
+  });
+
+  it("distinguishes no matches from a library with no songs", () => {
+    const html = renderToStaticMarkup(
+      <TrackLibrary {...libraryProps("missing")} />,
+    );
+    expect(html).toContain('role="status"');
+    expect(html).toContain("No songs match your search");
+    expect(html).not.toContain("Your songs will live here");
+    expect(html).not.toContain('class="library-track');
+    const empty = renderToStaticMarkup(
+      <TrackLibrary {...libraryProps("missing")} tracks={[]} />,
+    );
+    expect(empty).toContain("Your songs will live here");
+    expect(empty).not.toContain("No songs match");
+  });
+
+  it("updates search, selects the original track, and clears with button or Escape", () => {
+    const props = libraryProps("moon");
+    const focus = vi.fn();
+    libraryHarness.ref = { current: { focus } };
+    let elements: ReactElement<any>[];
+    try {
+      elements = libraryElements(TrackLibrary(props));
+    } finally {
+      libraryHarness.ref = null;
+    }
+    const input = elements.find((element) => element.type === "input")!;
+    input.props.onChange({ currentTarget: { value: "beatles" } });
+    expect(props.onQueryChange).toHaveBeenLastCalledWith("beatles");
+
+    const rows = elements.filter((element) =>
+      element.props.className?.startsWith("library-track"),
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0].props.className).toContain("current");
+    rows[1].props.onClick();
+    expect(props.selectTrack).toHaveBeenCalledExactlyOnceWith(libraryTracks[2]);
+    expect(props.onQueryChange).toHaveBeenCalledTimes(1);
+
+    const clear = elements.find(
+      (element) => element.props["aria-label"] === "Clear song search",
+    )!;
+    clear.props.onClick();
+    expect(props.onQueryChange).toHaveBeenLastCalledWith("");
+    expect(focus).toHaveBeenCalledOnce();
+    const preventDefault = vi.fn();
+    input.props.onKeyDown({ key: "Escape", preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(props.onQueryChange).toHaveBeenLastCalledWith("");
+    expect(focus).toHaveBeenCalledTimes(2);
+    const reset = renderToStaticMarkup(<TrackLibrary {...props} query="" />);
+    expect(reset).toContain("Here Comes the Sun");
+    expect(reset).toContain("Moon River");
+    expect(reset).not.toContain('aria-label="Clear song search"');
+  });
+
+  it("keeps selection through filtering and leaves import navigation unselected", () => {
+    const props = libraryProps("beatles");
+    const filtered = renderToStaticMarkup(<TrackLibrary {...props} />);
+    expect(filtered).not.toContain("library-track current");
+    const reset = renderToStaticMarkup(<TrackLibrary {...props} query="" />);
+    expect(reset).toContain("library-track current");
+    const importing = renderToStaticMarkup(
+      <TrackLibrary {...props} query="" importOpen />,
+    );
+    expect(importing).not.toContain("library-track current");
+    expect(props.selectTrack).not.toHaveBeenCalled();
+    expect(props.onQueryChange).not.toHaveBeenCalled();
   });
 });

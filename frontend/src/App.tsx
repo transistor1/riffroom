@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
+import "./App.css";
 import {
   active,
   isRootRun,
@@ -207,7 +208,124 @@ function formatBytes(bytes: number) {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 
+// Artist metadata is optional; older library entries only contain a title.
+type LibraryTrack = Track & { artist?: string | null };
+
+export function filterLibraryTracks<T extends LibraryTrack>(
+  tracks: T[],
+  query: string,
+): T[] {
+  const normalize = (value: string) =>
+    value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const terms = normalize(query).split(" ").filter(Boolean);
+  if (!terms.length) return tracks;
+  return tracks.filter((track) => {
+    const fields = [normalize(track.title), normalize(track.artist ?? "")];
+    return terms.every((term) => fields.some((field) => field.includes(term)));
+  });
+}
+
+export function TrackLibrary({
+  tracks,
+  query,
+  onQueryChange,
+  selectedId,
+  importOpen,
+  selectTrack,
+}: {
+  tracks: LibraryTrack[];
+  query: string;
+  onQueryChange: (query: string) => void;
+  selectedId: string | null;
+  importOpen: boolean;
+  selectTrack: (track: Track) => void;
+}) {
+  const searchInput = useRef<HTMLInputElement>(null);
+  const visibleTracks = filterLibraryTracks(tracks, query);
+  function clearSearch() {
+    onQueryChange("");
+    searchInput.current?.focus();
+  }
+  return (
+    <>
+      <div className="library-title">
+        <span>Library</span>
+        <span>{tracks.length}</span>
+      </div>
+      <div className="library-search">
+        <label htmlFor="library-search">Search songs</label>
+        <div className="library-search-field">
+          <input
+            ref={searchInput}
+            id="library-search"
+            type="search"
+            placeholder="Title or artist"
+            value={query}
+            onChange={(event) => onQueryChange(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                clearSearch();
+              }
+            }}
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label="Clear song search"
+              onClick={clearSearch}
+            >
+              <X size={15} />
+            </button>
+          )}
+        </div>
+      </div>
+      <nav className="library" aria-label="Track library">
+        {visibleTracks.map((t) => (
+          <button
+            key={t.id}
+            className={`library-track ${t.id === selectedId && !importOpen ? "current" : ""}`}
+            onClick={() => selectTrack(t)}
+          >
+            <span className="library-icon">
+              {active(t) ? (
+                <LoaderCircle size={17} className="spin" />
+              ) : (
+                <Music2 size={17} />
+              )}
+            </span>
+            <span>
+              <strong>{t.title}</strong>
+              <small>
+                {active(t)
+                  ? "Separating…"
+                  : t.status === "error"
+                    ? "Needs attention"
+                    : `${time(t.duration)} · ${t.runs.some(isRootRun) ? `${t.runs.filter(isRootRun).at(-1)!.stems.length} stems` : "Original"}`}
+              </small>
+            </span>
+            {t.id === selectedId && <span className="library-dot" />}
+          </button>
+        ))}
+        {!tracks.length ? (
+          <p className="empty-library">
+            Your songs will live here.
+            <br />
+            Ready whenever you are.
+          </p>
+        ) : !visibleTracks.length ? (
+          <p className="library-no-results" role="status">
+            No songs match your search. Try another title or artist, or clear
+            the search.
+          </p>
+        ) : null}
+      </nav>
+    </>
+  );
+}
+
 export default function App() {
+  const [librarySearch, setLibrarySearch] = useState("");
   const [models, setModels] = useState<Model[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -530,45 +648,14 @@ export default function App() {
         <button className="new-track" onClick={() => setImportOpen(true)}>
           <Plus size={18} /> Import a track
         </button>
-        <div className="library-title">
-          <span>Library</span>
-          <span>{tracks.length}</span>
-        </div>
-        <nav className="library" aria-label="Track library">
-          {tracks.map((t) => (
-            <button
-              key={t.id}
-              className={`library-track ${t.id === selectedId && !importOpen ? "current" : ""}`}
-              onClick={() => selectTrack(t)}
-            >
-              <span className="library-icon">
-                {active(t) ? (
-                  <LoaderCircle size={17} className="spin" />
-                ) : (
-                  <Music2 size={17} />
-                )}
-              </span>
-              <span>
-                <strong>{t.title}</strong>
-                <small>
-                  {active(t)
-                    ? "Separating…"
-                    : t.status === "error"
-                      ? "Needs attention"
-                      : `${time(t.duration)} · ${t.runs.some(isRootRun) ? `${t.runs.filter(isRootRun).at(-1)!.stems.length} stems` : "Original"}`}
-                </small>
-              </span>
-              {t.id === selectedId && <span className="library-dot" />}
-            </button>
-          ))}
-          {!tracks.length && (
-            <p className="empty-library">
-              Your songs will live here.
-              <br />
-              Ready whenever you are.
-            </p>
-          )}
-        </nav>
+        <TrackLibrary
+          tracks={tracks}
+          query={librarySearch}
+          onQueryChange={setLibrarySearch}
+          selectedId={selectedId}
+          importOpen={importOpen}
+          selectTrack={selectTrack}
+        />
         <div className="sidebar-bottom">
           <button
             onClick={() => {
