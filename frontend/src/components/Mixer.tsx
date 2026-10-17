@@ -8,6 +8,7 @@ import {
   Drum,
   Guitar,
   Headphones,
+  CircleHelp,
   LoaderCircle,
   Music2,
   Pause,
@@ -527,6 +528,17 @@ export default function Mixer({
   const [correctionRetry, setCorrectionRetry] = useState(0);
   const [loops, setLoops] = useState<PracticeLoop[]>(track.practice?.loops ?? []);
   const [loopMode, setLoopMode] = useState(false);
+  const [loopHelpOpen, setLoopHelpOpen] = useState(false);
+  const loopHelpRef = useRef<HTMLDivElement | null>(null);
+  const loopHelpId = `loop-help-${track.id}`;
+  useEffect(() => {
+    if (!loopHelpOpen) return;
+    const dismissOutside = (event: PointerEvent) => {
+      if (!loopHelpRef.current?.contains(event.target as Node)) setLoopHelpOpen(false);
+    };
+    document.addEventListener("pointerdown", dismissOutside);
+    return () => document.removeEventListener("pointerdown", dismissOutside);
+  }, [loopHelpOpen]);
   // Preferences never rewrite saved loop timestamps.
   const [loopSnap, setLoopSnap] = useState(() => ({
     trackId: track.id, enabled: loadLoopSnapPreference(track.id),
@@ -1028,13 +1040,37 @@ export default function Mixer({
                     : "Free placement"}
                 </small>
               </div>
-              <details className="loop-guidance">
-                <summary>Loop help</summary>
-                <p>Add passages, select their checkboxes, then turn on Loop to cycle in timeline order.
-                  Type exact times as seconds or m:ss.mmm, or seek and set a boundary at the playhead.
-                  Snap remembers your choice per song. Beat nudges stop when no legal beat remains;
-                  without a grid they are disabled. Typed times stay exact.</p>
-              </details>
+              <div className="loop-guidance" ref={loopHelpRef}
+                onBlur={e => {
+                  if (!e.currentTarget.contains(e.relatedTarget)) setLoopHelpOpen(false);
+                }}
+                onKeyDown={e => {
+                  if (e.key === "Escape" && loopHelpOpen) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setLoopHelpOpen(false);
+                    loopHelpRef.current?.querySelector("button")?.focus();
+                  }
+                }}>
+                <button type="button" className="small-button loop-help-trigger"
+                  aria-label="Loop help" aria-expanded={loopHelpOpen}
+                  aria-controls={loopHelpId} aria-describedby={loopHelpOpen ? loopHelpId : undefined}
+                  onClick={() => setLoopHelpOpen(!loopHelpOpen)}>
+                  <CircleHelp size={16} aria-hidden="true" />
+                </button>
+                {loopHelpOpen && <div id={loopHelpId} className="loop-help-popover"
+                  role="region" aria-label="Loop help guidance" tabIndex={0}
+                  onKeyDown={e => {
+                    // Let keys scroll the guidance without activating transport shortcuts.
+                    if (e.key !== "Escape") e.stopPropagation();
+                  }}>
+                  <p>Add passages, select their checkboxes, then turn on Loop to cycle in timeline order.</p>
+                  <p>Type exact times as seconds or m:ss.mmm, or seek and set a boundary at the playhead.</p>
+                  <p><strong>Snap to beat:</strong> Align loop boundaries to detected beats when adjusting them.
+                    Snap remembers your choice per song. Beat nudges stop when no legal beat remains;
+                    without a grid they are disabled. Typed times stay exact.</p>
+                </div>}
+              </div>
               {loopMode && !loops.some(loop => loop.enabled) && <small>Select at least one loop</small>}
             </div>
             <div className="saved-loops">

@@ -1454,6 +1454,88 @@ describe("optional practice loop snapping (stepped hooks, no DOM)", () => {
   }
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
+  it("opens compact loop guidance from an accessible trigger and closes on re-trigger or Escape", () => {
+    const { h, project, fetch } = setup();
+    const help = () => h.control(node => node.props["aria-label"] === "Loop help");
+    const wrapper = () => h.control(node => node.props.className === "loop-guidance");
+    const absent = () => {
+      expect(help()["aria-expanded"]).toBe(false);
+      expect(help()["aria-describedby"]).toBeUndefined();
+      expect(wrapper().children[1]).toBe(false);
+    };
+    absent();
+    expect(help().type).toBe("button");
+    help().onClick();
+    h.render(project);
+    expect(help()["aria-expanded"]).toBe(true);
+    const guidance = h.control(node => node.props.className === "loop-help-popover");
+    expect(guidance).toMatchObject({ id: help()["aria-controls"], role: "region", tabIndex: 0 });
+    expect(help()["aria-describedby"]).toBe(guidance.id);
+    const html = renderToStaticMarkup(guidance.children);
+    expect(html).toContain("Align loop boundaries to detected beats when adjusting them.");
+    expect(html).toContain("Typed times stay exact.");
+    expect(html).toContain("Snap remembers your choice per song.");
+    const stopPropagation = vi.fn();
+    guidance.onKeyDown({ key: " ", stopPropagation });
+    expect(stopPropagation).toHaveBeenCalledOnce();
+    guidance.onKeyDown({ key: "Escape", stopPropagation });
+    expect(stopPropagation).toHaveBeenCalledOnce(); // Escape reaches the wrapper to dismiss.
+    expect(h.control(node => node.props["aria-label"] === "Loop name").defaultValue).toBe("Verse");
+    help().onClick();
+    h.render(project);
+    absent();
+
+    help().onClick();
+    h.render(project);
+    const focus = vi.fn();
+    wrapper().ref.current = { querySelector: () => ({ focus }) };
+    const event = { key: "Escape", preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    wrapper().onKeyDown({ ...event, key: "Enter" });
+    h.render(project);
+    expect(help()["aria-expanded"]).toBe(true);
+    wrapper().onKeyDown(event);
+    h.render(project);
+    absent();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(event.stopPropagation).toHaveBeenCalledOnce();
+    expect(focus).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("dismisses loop help on outside pointer or focus departure and cleans up its listener", () => {
+    const { h, project } = setup();
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    vi.stubGlobal("document", { addEventListener, removeEventListener });
+    const help = () => h.control(node => node.props["aria-label"] === "Loop help");
+    const wrapper = () => h.control(node => node.props.className === "loop-guidance");
+    const sync = () => h.step("loop help dismissal", deps => deps.length === 1 && typeof deps[0] === "boolean");
+    sync();
+    expect(addEventListener).not.toHaveBeenCalled();
+    help().onClick();
+    h.render(project);
+    sync();
+    expect(addEventListener).toHaveBeenCalledWith("pointerdown", expect.any(Function));
+    const dismiss = addEventListener.mock.lastCall![1];
+    const inside = {};
+    const contains = (target: unknown) => target === inside;
+    wrapper().ref.current = { contains };
+    dismiss({ target: inside });
+    wrapper().onBlur({ currentTarget: { contains }, relatedTarget: inside });
+    h.render(project);
+    expect(help()["aria-expanded"]).toBe(true);
+    dismiss({ target: {} });
+    h.render(project);
+    sync();
+    expect(help()["aria-expanded"]).toBe(false);
+    expect(removeEventListener).toHaveBeenCalledWith("pointerdown", dismiss);
+    help().onClick();
+    h.render(project);
+    wrapper().onBlur({ currentTarget: { contains }, relatedTarget: null });
+    h.render(project);
+    expect(help()["aria-expanded"]).toBe(false);
+  });
+
   it("groups loop actions, chips, and the selected editor before playback adjustments", () => {
     const { h, project } = setup();
     const classes = (children: any[]) => children.filter(child => child?.props)
