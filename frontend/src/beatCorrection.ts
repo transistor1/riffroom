@@ -43,3 +43,50 @@ export function selectedClickGrid(
   // Pending/failed opt-in is explicit silence, never an unnoticed raw-grid fallback.
   return enabled ? correction?.grid ?? null : raw;
 }
+
+/** Only detected, ordered song-time beats are usable; never extrapolate an intro. */
+export function usableLoopBeats(grid: BeatGrid | null, duration: number): number[] {
+  if (!validBeatGrid(grid) || !Number.isFinite(duration) || duration <= 0) return [];
+  const beats = grid.beats.filter(beat => beat >= 0 && beat <= duration);
+  return beats.length >= 2 ? beats : [];
+}
+
+/** Snap within the legal boundary interval, retaining free placement if none fit. */
+export function loopBoundaryTime(
+  value: number, min: number, max: number, beats: readonly number[],
+): number {
+  const bounded = Math.max(min, Math.min(Number.isFinite(value) ? value : min, max));
+  let nearest = bounded;
+  let distance = Infinity;
+  for (const beat of beats) {
+    if (beat < min || beat > max) continue;
+    const delta = Math.abs(beat - bounded);
+    // Equal distances choose the earlier beat, consistently across editing paths.
+    if (delta < distance) { nearest = beat; distance = delta; }
+  }
+  return nearest;
+}
+
+export const loopSnapPreferenceKey = (trackId: string) =>
+  `riffroom:loop-snap:v1:${trackId}`;
+
+export function loadLoopSnapPreference(trackId: string): boolean {
+  try { return localStorage.getItem(loopSnapPreferenceKey(trackId)) === "true"; }
+  catch { return false; }
+}
+
+export function saveLoopSnapPreference(trackId: string, enabled: boolean) {
+  try { localStorage.setItem(loopSnapPreferenceKey(trackId), String(enabled)); }
+  catch { /* Keep the toggle usable for this session when storage is blocked. */ }
+}
+
+/** Step strictly past the current beat (within 10ms); no legal neighbor is a no-op. */
+export function nudgeLoopBoundary(
+  value: number, direction: -1 | 1, min: number, max: number, beats: readonly number[],
+): number {
+  // Include the exact tolerance boundary despite floating point subtraction noise.
+  const tolerance = 0.01 + 1e-9;
+  const candidates = beats.filter(beat => beat >= min && beat <= max &&
+    (direction === -1 ? beat < value - tolerance : beat > value + tolerance));
+  return (direction === -1 ? candidates.at(-1) : candidates[0]) ?? value;
+}

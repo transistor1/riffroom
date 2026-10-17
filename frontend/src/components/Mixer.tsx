@@ -26,7 +26,8 @@ import { api, loadPractice, savePractice } from "../api";
 import { DEFAULT_CLICK_VOLUME, MixerEngine } from "../audio";
 import {
   loadCorrectionPreference, saveCorrectionPreference, selectedClickGrid,
-  validateCorrection, type BeatCorrection,
+  validateCorrection, usableLoopBeats, loopBoundaryTime, nudgeLoopBoundary,
+  loadLoopSnapPreference, saveLoopSnapPreference, type BeatCorrection,
 } from "../beatCorrection";
 import {
   time,
@@ -526,6 +527,15 @@ export default function Mixer({
   const [correctionRetry, setCorrectionRetry] = useState(0);
   const [loops, setLoops] = useState<PracticeLoop[]>(track.practice?.loops ?? []);
   const [loopMode, setLoopMode] = useState(false);
+  // Preferences never rewrite saved loop timestamps.
+  const [loopSnap, setLoopSnap] = useState(() => ({
+    trackId: track.id, enabled: loadLoopSnapPreference(track.id),
+  }));
+  const snapEnabled = loopSnap.trackId === track.id
+    ? loopSnap.enabled : loadLoopSnapPreference(track.id);
+  if (loopSnap.trackId !== track.id) {
+    setLoopSnap({ trackId: track.id, enabled: snapEnabled });
+  }
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState("");
   const [splitModels, setSplitModels] = useState<Record<string, string>>({});
@@ -623,6 +633,8 @@ export default function Mixer({
     : beatAnalysis?.provider ?? "Beat analysis";
   const correctionDescription = `Grid: ${gridStatus}. ${engineDecision.label}. ${engineDecision.detail}`;
   const beatGrid = selectedClickGrid(rawBeatGrid, correctionEnabled, currentCorrection);
+  const loopBeats = usableLoopBeats(beatGrid, track.duration);
+  const snapBeats = snapEnabled ? loopBeats : [];
   useEffect(() => {
     setCorrectionEnabled(loadCorrectionPreference(track.id));
   }, [track.id]);
@@ -694,21 +706,24 @@ export default function Mixer({
   function editLoop(id: string, changes: Partial<PracticeLoop>) {
     updateLoops(loops.map(loop => loop.id === id ? { ...loop, ...changes } : loop));
   }
-  function boundary(field: "a" | "b", value: number) {
+  function boundary(field: "a" | "b", value: number, snap = true) {
     if (!selected) return;
-    const next = field === "a" ? Math.max(0, Math.min(value, selected.b - 0.05))
-      : Math.min(track.duration, Math.max(value, selected.a + 0.05));
+    const next = field === "a"
+      ? loopBoundaryTime(value, 0, selected.b - 0.05, snap ? snapBeats : [])
+      : loopBoundaryTime(value, selected.a + 0.05, track.duration, snap ? snapBeats : []);
     editLoop(selected.id, { [field]: next });
+    return next;
   }
   function addLoop() {
     if (track.duration < 0.05 || loops.length >= 50) return;
     // Keep the playhead as the start when possible; leave a useful tail at the end.
     const tail = Math.min(track.duration, Math.min(1, Math.max(0.05, track.duration / 4)));
-    const a = Math.max(0, Math.min(position, track.duration - tail));
+    const a = loopBoundaryTime(Math.min(position, track.duration - tail),
+      0, track.duration - 0.05, snapBeats);
     let number = 1;
     while (loops.some(loop => loop.name === `Loop ${number}`)) number++;
     const loop = { id: crypto.randomUUID(), name: `Loop ${number}`, a,
-      b: Math.min(track.duration, a + 8), enabled: true };
+      b: loopBoundaryTime(a + 8, a + 0.05, track.duration, snapBeats), enabled: true };
     updateLoops([...loops, loop]);
     setSelectedId(loop.id);
   }
@@ -989,13 +1004,87 @@ export default function Mixer({
           <span>{time(track.duration)}</span>
         </div>
         <div className="practice-controls">
-          <div className="loop-controls">
-            <button className={`small-button ${loopMode ? "selected" : ""}`}
-              onClick={() => setLoopMode(!loopMode)} aria-pressed={loopMode}>
-              <Repeat2 size={15} /> Loop
-            </button>
-            <button className="small-button" onClick={addLoop} disabled={loops.length >= 50 || track.duration < 0.05}>Add loop</button>
-            {loopMode && !loops.some(loop => loop.enabled) && <small>Select at least one loop</small>}
+          <div className="practice-loops" role="group" aria-label="Practice loops">
+            <div className="loop-controls" role="group" aria-label="Practice loop controls">
+              <button className={`small-button ${loopMode ? "selected" : ""}`}
+                onClick={() => setLoopMode(!loopMode)} aria-pressed={loopMode}>
+                <Repeat2 size={15} /> Loop
+              </button>
+              <button className="small-button" onClick={addLoop} disabled={loops.length >= 50 || track.duration < 0.05}>Add loop</button>
+              <div className="loop-snap-control">
+                <button className={`small-button ${snapEnabled ? "selected" : ""}`}
+                  aria-label="Snap loop boundaries to beats" aria-pressed={snapEnabled}
+                  disabled={!loopBeats.length && !snapEnabled}
+                  aria-describedby="loop-snap-status"
+                  onClick={() => {
+                    saveLoopSnapPreference(track.id, !snapEnabled);
+                    setLoopSnap({ trackId: track.id, enabled: !snapEnabled });
+                  }}>
+                  Snap to beat: {snapEnabled ? "On" : "Off"}
+                </button>
+                <small id="loop-snap-status" role="status">
+                  {!loopBeats.length ? "Beat snap unavailable — no usable selected grid. Beat nudges disabled; other edits stay free."
+                    : snapEnabled ? `Snapping to ${correctionEnabled && currentCorrection?.status === "applied" ? "corrected" : "raw"} beats.`
+                    : "Free placement"}
+                </small>
+              </div>
+              <details className="loop-guidance">
+                <summary>Loop help</summary>
+                <p>Add passages, select their checkboxes, then turn on Loop to cycle in timeline order.
+                  Type exact times as seconds or m:ss.mmm, or seek and set a boundary at the playhead.
+                  Snap remembers your choice per song. Beat nudges stop when no legal beat remains;
+                  without a grid they are disabled. Typed times stay exact.</p>
+              </details>
+              {loopMode && !loops.some(loop => loop.enabled) && <small>Select at least one loop</small>}
+            </div>
+            <div className="saved-loops">
+              {timelineLoops.map((loop, index) => <div className="saved-loop" key={loop.id}>
+                <input type="checkbox" aria-label={`Enable ${loop.name}`} checked={loop.enabled}
+                  onChange={e => editLoop(loop.id, { enabled: e.target.checked })} />
+                <button className={`small-button ${selectedId === loop.id ? "selected" : ""}`}
+                  aria-pressed={selectedId === loop.id} onClick={() => setSelectedId(loop.id)}>
+                  {index + 1}. {loop.name} <small>{preciseTime(loop.a)} → {preciseTime(loop.b)}</small>
+                </button>
+                <button className="text-button" aria-label={`Delete ${loop.name}`} onClick={() => {
+                  if (selectedId === loop.id) setSelectedId(null);
+                  updateLoops(loops.filter(l => l.id !== loop.id));
+                }}>×</button>
+              </div>)}
+            </div>
+            {selected && <div className="loop-editor">
+              <label>Name <input key={selected.id} aria-label="Loop name" maxLength={60}
+                defaultValue={selected.name} onBlur={e => {
+                  const name = e.target.value.trim() || selected.name;
+                  e.target.value = name; editLoop(selected.id, { name });
+                }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /></label>
+              {(["a", "b"] as const).map(field => {
+                const label = field === "a" ? "start" : "end";
+                return <div className="loop-boundary" key={field}>
+                  <label>{label === "start" ? "Start" : "End"} <input
+                    key={`${selected.id}:${selected[field]}`} aria-label={`Loop ${label}`} defaultValue={preciseTime(selected[field])}
+                    onBlur={e => {
+                      const value = parseTime(e.target.value);
+                      const next = value === null ? selected[field] : boundary(field, value, false);
+                      e.target.value = preciseTime(next ?? selected[field]);
+                    }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /></label>
+                  {([-1, 1] as const).map(direction => {
+                    const next = snapEnabled
+                      ? nudgeLoopBoundary(selected[field], direction,
+                        field === "a" ? 0 : selected.a + 0.05,
+                        field === "a" ? selected.b - 0.05 : track.duration, loopBeats)
+                      : selected[field] + direction * 0.1;
+                    return <button key={direction} className="small-button"
+                      aria-label={`Nudge ${label} ${direction === -1 ? "back" : "forward"} ${snapEnabled ? "1 beat" : "0.1 seconds"}`}
+                      disabled={snapEnabled && next === selected[field]}
+                      onClick={() => boundary(field, next, false)}>
+                      {direction === -1 ? "−" : "+"}{snapEnabled ? "1 beat" : "0.1"}
+                    </button>;
+                  })}
+                  <button className="small-button" title={`Set loop ${label} at playhead`} onClick={() => boundary(field, position)}>Set {label} at playhead</button>
+                </div>;
+              })}
+            </div>}
+            {saveError && <small role="alert">{saveError}</small>}
           </div>
           <div className="practice-adjustments">
             <div className="metronome-group" role="group" aria-label="Metronome controls">
@@ -1190,44 +1279,6 @@ export default function Mixer({
             </div>
           </div>
         </div>
-        <div className="saved-loops">
-          {timelineLoops.map((loop, index) => <div className="saved-loop" key={loop.id}>
-            <input type="checkbox" aria-label={`Enable ${loop.name}`} checked={loop.enabled}
-              onChange={e => editLoop(loop.id, { enabled: e.target.checked })} />
-            <button className={`small-button ${selectedId === loop.id ? "selected" : ""}`}
-              aria-pressed={selectedId === loop.id} onClick={() => setSelectedId(loop.id)}>
-              {index + 1}. {loop.name} <small>{preciseTime(loop.a)} → {preciseTime(loop.b)}</small>
-            </button>
-            <button className="text-button" aria-label={`Delete ${loop.name}`} onClick={() => {
-              if (selectedId === loop.id) setSelectedId(null);
-              updateLoops(loops.filter(l => l.id !== loop.id));
-            }}>×</button>
-          </div>)}
-        </div>
-        {selected && <div className="loop-editor">
-          <label>Name <input key={selected.id} aria-label="Loop name" maxLength={60}
-            defaultValue={selected.name} onBlur={e => {
-              const name = e.target.value.trim() || selected.name;
-              e.target.value = name; editLoop(selected.id, { name });
-            }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /></label>
-          {(["a", "b"] as const).map(field => {
-            const label = field === "a" ? "start" : "end";
-            return <div className="loop-boundary" key={field}>
-              <label>{label === "start" ? "Start" : "End"} <input
-                key={`${selected.id}:${selected[field]}`} aria-label={`Loop ${label}`} defaultValue={preciseTime(selected[field])}
-                onBlur={e => {
-                  const value = parseTime(e.target.value);
-                  if (value !== null) boundary(field, value);
-                  e.target.value = preciseTime(value === null ? selected[field] : field === "a" ? Math.max(0, Math.min(value, selected.b - 0.05)) : Math.min(track.duration, Math.max(value, selected.a + 0.05)));
-                }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /></label>
-              <button className="small-button" aria-label={`Nudge ${label} back 0.1 seconds`} onClick={() => boundary(field, selected[field] - 0.1)}>−0.1</button>
-              <button className="small-button" aria-label={`Nudge ${label} forward 0.1 seconds`} onClick={() => boundary(field, selected[field] + 0.1)}>+0.1</button>
-              <button className="small-button" title={`Set loop ${label} at playhead`} onClick={() => boundary(field, position)}>Set {label} at playhead</button>
-            </div>;
-          })}
-        </div>}
-        <p className="loop-help">Add passages, select their checkboxes, then turn on Loop to cycle in timeline order. Edit times as seconds or m:ss.mmm.</p>
-        {saveError && <small role="alert">{saveError}</small>}
       </section>
       <div className="section-heading">
         <div>

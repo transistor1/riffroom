@@ -19,7 +19,7 @@ import Mixer, {
   transitionPerformanceShortcut,
 } from "./Mixer";
 import { DEFAULT_CLICK_VOLUME, MixerEngine } from "../audio";
-import { correctionPreferenceKey, type BeatCorrection } from "../beatCorrection";
+import { correctionPreferenceKey, loopSnapPreferenceKey, type BeatCorrection } from "../beatCorrection";
 
 // Exercise Mixer itself without a DOM or a React renderer. Selected effects
 // (including engine creation for playback preferences) are stepped below. This checks real
@@ -921,7 +921,7 @@ describe("automatic beat preparation controls", () => {
 type CapturedEffect = { callback: () => void | (() => void); deps: unknown[] };
 
 function mixerClickHarness() {
-  const player = { setClickOptions: vi.fn(), setClickVolume: vi.fn(), setRate: vi.fn(), setPitch: vi.fn() };
+  const player = { setClickOptions: vi.fn(), setClickVolume: vi.fn(), setRate: vi.fn(), setPitch: vi.fn(), setLoopPlan: vi.fn(), seek: vi.fn() };
   const harness = {
     player, states: [] as any[], refs: [] as any[],
     stateCursor: 0, refCursor: 0, effects: [] as CapturedEffect[],
@@ -1412,5 +1412,287 @@ describe("Mixer beat-grid synchronization (stepped hooks, no DOM)", () => {
       );
     }
     expect(harness.player.setClickOptions).toHaveBeenCalledTimes(4);
+  });
+});
+
+
+describe("optional practice loop snapping (stepped hooks, no DOM)", () => {
+  const raw: BeatGrid = { beats: [0, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 4, 8, 12, 20, 29.8],
+    downbeats: [0, 2, 4, 8], time_signature: 4 };
+  const saved = [
+    { id: "first", name: "Verse", a: 0.13, b: 8.13, enabled: true },
+    { id: "second", name: "Chorus", a: 12.12, b: 20.12, enabled: false },
+  ];
+  const song = (): Track => ({ ...track([]), practice: { loops: structuredClone(saved) },
+    beat_analysis: { ...raw, status: "ready", message: "", error: null, created_at: "first" } });
+  const snap = (h: ReturnType<typeof mixerClickHarness>) =>
+    h.control(node => node.props["aria-label"] === "Snap loop boundaries to beats");
+  const boundary = (h: ReturnType<typeof mixerClickHarness>, label = "start") =>
+    h.control(node => node.props["aria-label"] === `Loop ${label}`);
+  const loops = (h: ReturnType<typeof mixerClickHarness>) => {
+    h.step("loop sync", deps => deps.length === 2 && typeof deps[0] === "boolean" && Array.isArray(deps[1]));
+    return h.player.setLoopPlan.mock.lastCall![1];
+  };
+  const edit = (h: ReturnType<typeof mixerClickHarness>, value: string, label = "start") => {
+    const target = { value };
+    boundary(h, label).onBlur({ target });
+    return target.value;
+  };
+  function setup(project = song()) {
+    vi.useFakeTimers();
+    const storage = memoryStorage();
+    storage.setItem(correctionPreferenceKey(project.id), "false");
+    vi.stubGlobal("localStorage", storage);
+    const fetch = vi.fn(async () => Response.json(project));
+    vi.stubGlobal("fetch", fetch);
+    const h = mixerClickHarness();
+    h.render(project);
+    h.control(node => node.type === "button" && node.props["aria-pressed"] === false &&
+      Array.isArray(node.props.children) && node.props.children.includes(". ") && node.props.children.includes("Verse")).onClick();
+    h.render(project);
+    return { h, project, fetch, storage };
+  }
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+  it("groups loop actions, chips, and the selected editor before playback adjustments", () => {
+    const { h, project } = setup();
+    const classes = (children: any[]) => children.filter(child => child?.props)
+      .map(child => child.props.className);
+    const practice = h.control(node => node.props.className === "practice-controls");
+    expect(classes(practice.children)).toEqual(["practice-loops", "practice-adjustments"]);
+    const group = h.control(node => node.props["aria-label"] === "Practice loops");
+    expect(group.role).toBe("group");
+    expect(classes(group.children)).toEqual(["loop-controls", "saved-loops", "loop-editor"]);
+    const adjustments = h.control(node => node.props.className === "practice-adjustments");
+    expect(classes(adjustments.children)).toEqual(["metronome-group", "playback-adjustments"]);
+    expect(h.control(node => node.props["aria-label"] === "Loop name").defaultValue).toBe("Verse");
+
+    // Switching chips keeps the same editor inside the loop group.
+    h.control(node => node.type === "button" && Array.isArray(node.props.children) &&
+      node.props.children.includes("Chorus")).onClick();
+    h.render(project);
+    expect(h.control(node => node.props["aria-label"] === "Loop name").defaultValue).toBe("Chorus");
+    expect(boundary(h).defaultValue).toBe("0:12.120");
+    expect(classes(h.control(node => node.props.className === "practice-loops").children))
+      .toEqual(["loop-controls", "saved-loops", "loop-editor"]);
+  });
+
+  it("keeps actions available after deleting all loops and reopens the editor on add", () => {
+    const { h, project } = setup();
+    h.control(node => node.props["aria-label"] === "Delete Verse").onClick();
+    h.render(project);
+    expect(h.control(node => node.props.className === "practice-loops").children
+      .filter((child: any) => child?.props).map((child: any) => child.props.className))
+      .toEqual(["loop-controls", "saved-loops"]);
+    expect(loops(h)).toEqual([saved[1]]);
+    h.control(node => node.props["aria-label"] === "Delete Chorus").onClick();
+    h.render(project);
+    expect(loops(h)).toEqual([]);
+    expect(h.control(node => node.props.className === "saved-loops").children).toEqual([]);
+    expect(h.button("Add loop").disabled).toBe(false);
+    h.click("Add loop");
+    h.render(project);
+    expect(loops(h)).toHaveLength(1);
+    expect(h.control(node => node.props["aria-label"] === "Loop name").defaultValue).toBe("Loop 1");
+    expect(h.control(node => node.props.className === "practice-loops").children
+      .filter((child: any) => child?.props).map((child: any) => child.props.className))
+      .toEqual(["loop-controls", "saved-loops", "loop-editor"]);
+  });
+
+  it("defaults off and toggles without changing or saving multiple existing loops", () => {
+    const { h, project, fetch } = setup();
+    expect(snap(h)["aria-pressed"]).toBe(false);
+    expect(loops(h)).toEqual(saved);
+    snap(h).onClick();
+    h.render(project);
+    expect(snap(h)["aria-pressed"]).toBe(true);
+    expect(loops(h)).toEqual(saved);
+    expect(fetch).not.toHaveBeenCalled();
+    const reopened = mixerClickHarness();
+    reopened.render(project);
+    expect(snap(reopened)["aria-pressed"]).toBe(true);
+    expect(edit(h, "1.29")).toBe("0:01.290");
+    h.render(project);
+    expect(loops(h)[0].a).toBe(1.29);
+    expect(loops(h)[1]).toEqual(saved[1]);
+    snap(h).onClick();
+    h.render(project);
+    edit(h, "1.29");
+    h.render(project);
+    expect(loops(h)[0].a).toBe(1.29);
+  });
+
+  it("loads saved multiple loops unchanged even when snap is enabled before the response", async () => {
+    const { h, project, fetch } = setup();
+    snap(h).onClick();
+    h.render(project);
+    h.step("practice load", deps => deps.length === 1 && deps[0] === project.id, 1);
+    await vi.advanceTimersByTimeAsync(0);
+    h.render(project);
+    expect(loops(h)).toEqual(saved);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(`/api/tracks/${project.id}`, undefined);
+    expect(snap(h)["aria-pressed"]).toBe(true);
+  });
+
+  it("keeps typing exact and nudges directionally in song time at reduced speed", () => {
+    const { h, project } = setup();
+    h.control(node => node.props["aria-label"] === "Speed").onChange({ target: { value: "0.5" } });
+    expect(() => h.control(node => node.props["aria-label"] === "Drag loop start")).toThrow();
+    snap(h).onClick();
+    h.render(project);
+    edit(h, "1.29");
+    h.render(project);
+    expect(loops(h)[0].a).toBe(1.29);
+    const nudge = (label: string) => {
+      h.control(node => node.props["aria-label"] === label).onClick();
+      h.render(project);
+    };
+    nudge("Nudge start forward 1 beat");
+    expect(loops(h)[0].a).toBe(1.5);
+    nudge("Nudge start back 1 beat");
+    expect(loops(h)[0].a).toBe(1);
+    edit(h, "1.509");
+    h.render(project);
+    nudge("Nudge start back 1 beat");
+    expect(loops(h)[0].a).toBe(1);
+    edit(h, "1.491");
+    h.render(project);
+    nudge("Nudge start forward 1 beat");
+    expect(loops(h)[0].a).toBe(2);
+    h.control(node => node.props["aria-label"] === "Seek").onChange({ target: { value: "3.83" } });
+    h.render(project);
+    h.control(node => node.props.title === "Set loop start at playhead").onClick();
+    h.render(project);
+    expect(loops(h)[0].a).toBe(4);
+    edit(h, "4", "end");
+    h.render(project);
+    expect(loops(h)[0].b).toBe(4.05);
+    expect(h.control(node => node.props["aria-label"] === "Nudge start forward 1 beat").disabled).toBe(true);
+    edit(h, "999", "end");
+    h.render(project);
+    expect(loops(h)[0].b).toBe(30);
+    expect(h.control(node => node.props["aria-label"] === "Nudge end forward 1 beat").disabled).toBe(true);
+    snap(h).onClick();
+    h.render(project);
+    expect(loops(h)[0]).toMatchObject({ a: 4, b: 30 });
+    nudge("Nudge start back 0.1 seconds");
+    expect(loops(h)[0].a).toBe(3.9);
+    expect(project.practice?.loops).toEqual(saved);
+  });
+
+  it("restores independent song preferences across track switches and reopening", () => {
+    const { h, project, storage, fetch } = setup();
+    snap(h).onClick();
+    h.render(project);
+    expect(storage.getItem(loopSnapPreferenceKey(project.id))).toBe("true");
+    const other = { ...project, id: "other-song" };
+    h.render(other);
+    expect(snap(h)["aria-pressed"]).toBe(false);
+    h.render(other);
+    snap(h).onClick();
+    h.render(other);
+    snap(h).onClick();
+    h.render(other);
+    expect(storage.getItem(loopSnapPreferenceKey(other.id))).toBe("false");
+    h.render(project);
+    h.render(project);
+    expect(snap(h)["aria-pressed"]).toBe(true);
+    expect(loops(h)).toEqual(saved);
+    expect(fetch).not.toHaveBeenCalled();
+    const reopened = mixerClickHarness();
+    reopened.render(project);
+    expect(snap(reopened)["aria-pressed"]).toBe(true);
+  });
+
+  it("keeps the toggle usable when storage is unavailable", () => {
+    const { h, project } = setup();
+    vi.stubGlobal("localStorage", {
+      getItem: () => { throw new Error("blocked"); },
+      setItem: () => { throw new Error("blocked"); },
+    });
+    snap(h).onClick();
+    h.render(project);
+    expect(snap(h)["aria-pressed"]).toBe(true);
+    expect(loops(h)).toEqual(saved);
+  });
+
+  it("snaps both boundaries on creation and persists only the explicitly edited loops", async () => {
+    const { h, project, fetch } = setup();
+    snap(h).onClick();
+    h.render(project);
+    h.control(node => node.props["aria-label"] === "Seek").onChange({ target: { value: "1.29" } });
+    h.render(project);
+    h.click("Add loop");
+    h.render(project);
+    expect(loops(h)).toEqual([...saved, expect.objectContaining({ a: 1.5, b: 8, enabled: true })]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(fetch).toHaveBeenCalledWith(`/api/tracks/${project.id}/practice`, expect.objectContaining({
+      method: "PUT", body: JSON.stringify({ loops: loops(h) }),
+    }));
+  });
+
+  it("disables unavailable snapping and preserves free placement without a usable grid", () => {
+    const { h, project } = setup({ ...song(), beat_analysis: undefined });
+    expect(snap(h).disabled).toBe(true);
+    edit(h, "1.234");
+    h.render(project);
+    expect(loops(h)[0].a).toBe(1.234);
+  });
+
+  it("restores snap On without a grid, disables beat nudges, and permits exact edits and opting out", () => {
+    const { h, project, storage } = setup();
+    snap(h).onClick();
+    const unavailable = { ...project, beat_analysis: undefined };
+    h.render(unavailable);
+    expect(snap(h)["aria-pressed"]).toBe(true);
+    expect(snap(h).disabled).toBe(false);
+    for (const label of ["start", "end"]) {
+      for (const direction of ["back", "forward"]) {
+        expect(h.control(node => node.props["aria-label"] === `Nudge ${label} ${direction} 1 beat`).disabled).toBe(true);
+      }
+    }
+    edit(h, "1.234");
+    h.render(unavailable);
+    expect(loops(h)[0].a).toBe(1.234);
+    const reopened = mixerClickHarness();
+    reopened.render(unavailable);
+    expect(snap(reopened)["aria-pressed"]).toBe(true);
+    snap(h).onClick();
+    h.render(unavailable);
+    expect(snap(h)["aria-pressed"]).toBe(false);
+    expect(storage.getItem(loopSnapPreferenceKey(project.id))).toBe("false");
+    expect(loops(h)[0].a).toBe(1.234);
+    h.control(node => node.props["aria-label"] === "Nudge end back 0.1 seconds").onClick();
+    h.render(unavailable);
+    expect(loops(h)[0].b).toBeCloseTo(8.03);
+  });
+
+  it("follows corrected/Raw selection without mutation and disables nudges while Auto is pending", async () => {
+    const { h, project, fetch } = setup();
+    const corrected = { ...raw, beats: raw.beats.filter(beat => beat !== 0.25) };
+    fetch.mockResolvedValue(Response.json({ status: "applied", source_analysis: project.beat_analysis, grid: corrected }));
+    snap(h).onClick();
+    h.render(project);
+    h.control(node => node.props["aria-label"] === "Nudge start forward 1 beat").onClick();
+    h.render(project);
+    expect(loops(h)[0].a).toBe(0.25);
+    h.click("Auto");
+    h.render(project);
+    expect(loops(h)[0].a).toBe(0.25);
+    expect(h.control(node => node.props["aria-label"] === "Nudge start forward 1 beat").disabled).toBe(true);
+    h.request(project);
+    await vi.advanceTimersByTimeAsync(0);
+    h.render(project);
+    expect(loops(h)[0].a).toBe(0.25);
+    h.control(node => node.props["aria-label"] === "Nudge start forward 1 beat").onClick();
+    h.render(project);
+    expect(loops(h)[0].a).toBe(0.5);
+    h.click("Raw");
+    h.render(project);
+    expect(loops(h)[0].a).toBe(0.5);
+    h.control(node => node.props["aria-label"] === "Nudge start back 1 beat").onClick();
+    h.render(project);
+    expect(loops(h)[0].a).toBe(0.25);
   });
 });

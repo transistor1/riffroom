@@ -91,3 +91,63 @@
     max-width: 100%;
   }
 }
+
+.loop-controls .loop-snap-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  max-width: 100%;
+}
+
+.loop-snap-control small {
+  font-size: 11px;
+}
+
+.loop-guidance {
+  position: relative;
+  font-size: 11px;
+  max-width: 100%;
+}
+
+.loop-guidance summary { cursor: pointer; }
+.loop-guidance p { max-width: 44ch; margin: 6px 0; }
+
+.practice-controls .loop-controls {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Actions, saved passages, and the selected editor share one waveform-adjacent group. */
+.practice-controls .practice-loops {
+  display: grid;
+  flex: 1 1 100%;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #374239;
+  border-radius: 8px;
+  background: #202723;
+}
+
+.practice-loops .saved-loops,
+.practice-loops .loop-editor {
+  min-width: 0;
+  margin-top: 0;
+}
+
+.practice-loops .saved-loops:empty {
+  display: none;
+}
+
+.practice-loops .loop-editor {
+  padding-top: 8px;
+  border-top: 1px solid #374239;
+}
+
+.practice-loops .loop-boundary,
+.practice-loops .loop-editor label {
+  min-width: 0;
+  max-width: 100%;
+}
