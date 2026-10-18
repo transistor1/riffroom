@@ -179,3 +179,118 @@
   min-width: 0;
   max-width: 100%;
 }
+
+.practice-loops .loop-editor {
+  display: grid;
+  gap: 10px;
+}
+.loop-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.loop-editor-heading h3 {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.loop-editor-heading .loop-editor-idle {
+  color: #aab5a6;
+  font-weight: 400;
+}
+.loop-editor-details {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.practice-loops .loop-name,
+.practice-loops .loop-boundary {
+  display: grid;
+  gap: 8px;
+}
+.practice-loops .loop-name {
+  grid-template-columns: 190px minmax(0, 1fr);
+}
+.practice-loops .loop-name input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.practice-loops .loop-boundary {
+  grid-template-columns: 190px minmax(190px, max-content) minmax(0, 1fr);
+  align-items: center;
+}
+.practice-loops .loop-editor label {
+  font-size: 12px;
+}
+.loop-editor label > span {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.practice-loops .loop-boundary label {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+.practice-loops .loop-boundary input {
+  width: 100%;
+  box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
+}
+.loop-nudges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.practice-loops .loop-capture {
+  background: #cfdfa3;
+  color: #202723;
+  border-color: #cfdfa3;
+  font-weight: 700;
+}
+.loop-capture kbd {
+  margin-left: 6px;
+  font: inherit;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.practice-loops .loop-delete {
+  justify-self: start;
+  color: #efb6ae;
+}
+.loop-capture-status {
+  color: #dce4d7;
+}
+.loop-description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .practice-loops .loop-boundary {
+  grid-template-columns: 190px minmax(0, 1fr);
+}
+  .loop-nudges {
+  grid-column: 2;
+}
+}
+
+@media (max-width: 480px) {
+  .practice-loops .loop-name,
+  .practice-loops .loop-boundary {
+  grid-template-columns: minmax(0, 1fr);
+}
+  .loop-nudges {
+  grid-column: 1;
+}
+  .practice-loops .loop-name {
+  gap: 6px;
+}
+}

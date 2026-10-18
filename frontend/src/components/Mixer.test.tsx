@@ -921,7 +921,7 @@ describe("automatic beat preparation controls", () => {
 type CapturedEffect = { callback: () => void | (() => void); deps: unknown[] };
 
 function mixerClickHarness() {
-  const player = { setClickOptions: vi.fn(), setClickVolume: vi.fn(), setRate: vi.fn(), setPitch: vi.fn(), setLoopPlan: vi.fn(), seek: vi.fn() };
+  const player = { position: vi.fn<() => number | undefined>(() => undefined), setClickOptions: vi.fn(), setClickVolume: vi.fn(), setRate: vi.fn(), setPitch: vi.fn(), setLoopPlan: vi.fn(), seek: vi.fn() };
   const harness = {
     player, states: [] as any[], refs: [] as any[],
     stateCursor: 0, refCursor: 0, effects: [] as CapturedEffect[],
@@ -1447,12 +1447,255 @@ describe("optional practice loop snapping (stepped hooks, no DOM)", () => {
     vi.stubGlobal("fetch", fetch);
     const h = mixerClickHarness();
     h.render(project);
-    h.control(node => node.type === "button" && node.props["aria-pressed"] === false &&
-      Array.isArray(node.props.children) && node.props.children.includes(". ") && node.props.children.includes("Verse")).onClick();
+    h.control(node => node.props["aria-label"] === "Edit Verse").onClick();
     h.render(project);
     return { h, project, fetch, storage };
   }
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+  function keyboard(h: ReturnType<typeof mixerClickHarness>) {
+    const addEventListener = vi.fn();
+    vi.stubGlobal("window", { addEventListener, removeEventListener: vi.fn() });
+    const sync = () => {
+      h.step("keyboard", deps => deps.length === 6 && typeof deps[0] === "function" && Array.isArray(deps[3]));
+      return addEventListener.mock.lastCall![1];
+    };
+    return (key: string, extra: Record<string, unknown> = {}) => {
+      const event = { key, code: key === " " ? "Space" : `Key${key.toUpperCase()}`,
+        target: { tagName: "DIV", isContentEditable: false },
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false,
+        repeat: false, isComposing: false, preventDefault: vi.fn(), ...extra };
+      sync()(event);
+      return event;
+    };
+  }
+
+  it("captures the selected loop from the live playing playhead with A/B and leaves Space available", () => {
+    const { h, project } = setup();
+    const playingPlayer = Object.assign(h.player, { playing: true });
+    const press = keyboard(h);
+    h.player.position.mockReturnValue(2.37);
+    expect(press("a").preventDefault).toHaveBeenCalledOnce();
+    h.render(project);
+    expect(loops(h)).toEqual([{ ...saved[0], a: 2.37 }, saved[1]]);
+    h.player.position.mockReturnValue(6.73);
+    press("b");
+    h.render(project);
+    expect(loops(h)[0]).toMatchObject({ a: 2.37, b: 6.73 });
+    expect(h.player.seek).not.toHaveBeenCalled();
+    expect(playingPlayer.playing).toBe(true);
+    expect(press(" ").preventDefault).toHaveBeenCalledOnce();
+    h.render(project);
+    expect(loops(h)[0]).toMatchObject({ a: 2.37, b: 6.73 });
+    expect(h.control(node => node.props.className === "loop-capture-status").children)
+      .toContain("End (B) set to 0:06.730");
+  });
+
+  it("guards A/B in form controls, editable descendants, modified keys, repeats, and composition", () => {
+    const { h, project, fetch } = setup();
+    const press = keyboard(h);
+    h.player.position.mockReturnValue(3);
+    const guards = [
+      ...["INPUT", "SELECT", "BUTTON", "TEXTAREA"].map(tagName => ({ target: { tagName } })),
+      { target: { tagName: "DIV", isContentEditable: true } },
+      { target: { tagName: "SPAN", closest: () => ({ tagName: "BUTTON" }) } },
+      { target: { tagName: "SPAN", closest: () => ({ contentEditable: "true" }) } },
+      ...["altKey", "ctrlKey", "metaKey", "shiftKey", "repeat", "isComposing"].map(key => ({ [key]: true })),
+    ];
+    for (const guard of guards) {
+      for (const key of ["a", "b"]) expect(press(key, guard).preventDefault).not.toHaveBeenCalled();
+    }
+    h.render(project);
+    expect(loops(h)).toEqual(saved);
+    expect(fetch).not.toHaveBeenCalled();
+    // Without an editing selection, shortcuts never create a passage.
+    const unselected = mixerClickHarness();
+    unselected.render(project);
+    const unselectedPress = keyboard(unselected);
+    expect(unselectedPress("a").preventDefault).not.toHaveBeenCalled();
+    expect(unselectedPress("b").preventDefault).not.toHaveBeenCalled();
+    unselected.render(project);
+    expect(loops(unselected)).toEqual(saved);
+  });
+
+  it("refuses crossing or equal captures without saving or changing either original boundary", () => {
+    const { h, project, fetch } = setup();
+    const press = keyboard(h);
+    for (const [key, playhead] of [["a", 8.13], ["a", 12], ["b", 0.13], ["b", 0]] as const) {
+      h.player.position.mockReturnValue(playhead);
+      press(key);
+      h.render(project);
+      expect(loops(h)).toEqual(saved);
+      expect(h.control(node => node.props.className === "loop-capture-status").children).toContain("unchanged");
+    }
+    // The primary capture button uses the same refusal path.
+    h.player.position.mockReturnValue(20);
+    h.control(node => node.props.title === "Set loop start at playhead (A)").onClick();
+    h.render(project);
+    expect(loops(h)).toEqual(saved);
+    vi.advanceTimersByTime(300);
+    expect(fetch).not.toHaveBeenCalled();
+    h.control(node => node.props["aria-label"] === "Edit Chorus").onClick();
+    h.render(project);
+    h.player.position.mockReturnValue(14);
+    press("a");
+    h.render(project);
+    expect(loops(h)).toEqual([saved[0], { ...saved[1], a: 14 }]);
+  });
+
+  it("retains beat snapping for valid captures and refuses a snapped crossing", () => {
+    const { h, project } = setup();
+    snap(h).onClick();
+    h.render(project);
+    const press = keyboard(h);
+    h.player.position.mockReturnValue(1.29);
+    press("a");
+    h.render(project);
+    expect(loops(h)[0]).toMatchObject({ a: 1.5, b: 8.13 });
+    // A legal raw position can snap onto the opposite boundary; preserve the loop.
+    edit(h, "1.5", "start");
+    edit(h, "4", "end");
+    h.render(project);
+    h.player.position.mockReturnValue(3.9);
+    press("a");
+    h.render(project);
+    expect(loops(h)[0]).toMatchObject({ a: 1.5, b: 4 });
+    expect(h.control(node => node.props.className === "loop-capture-status").children).toContain("unchanged");
+    snap(h).onClick();
+    h.render(project);
+    press("a");
+    h.render(project);
+    expect(loops(h)[0]).toMatchObject({ a: 3.9, b: 4 });
+  });
+
+  it("toggles the current chip closed and open, switches chips, and leaves playback unchanged", () => {
+    const { h, project, fetch } = setup();
+    const chip = (name: string) => h.control(node => node.type === "button" &&
+      node.props["aria-label"] === `Edit ${name}`);
+    const assertEditing = (name?: string) => {
+      for (const loop of saved) {
+        expect(chip(loop.name)["aria-pressed"]).toBe(loop.name === name);
+        expect(chip(loop.name).className.split(" ").includes("selected")).toBe(loop.name === name);
+        const region = h.control(node => node.props["data-testid"] === "loop-region" &&
+          node.props.title === loop.name);
+        expect(region.className.split(" ").includes("chosen")).toBe(loop.name === name);
+        expect(h.control(node => node.type === "input" &&
+          node.props["aria-describedby"] === `loop-description-${loop.id}`).checked).toBe(loop.enabled);
+      }
+      if (name) {
+        expect(h.control(node => node.props["aria-label"] === "Loop name").defaultValue).toBe(name);
+        expect(h.control(node => node.type === "h3" &&
+          node.props.children === `Editing: ${name}`)).toBeDefined();
+      } else {
+        expect(() => boundary(h)).toThrow();
+        expect(h.control(node => node.props.className === "loop-editor-idle").children)
+          .toBe("No loop being edited");
+      }
+      expect(loops(h)).toEqual(saved);
+      expect(h.player.setLoopPlan.mock.lastCall![0]).toBe(false);
+    };
+    assertEditing("Verse");
+    for (const [clicked, editing] of [
+      ["Verse", undefined], ["Verse", "Verse"], ["Chorus", "Chorus"],
+      ["Verse", "Verse"], ["Verse", undefined], ["Chorus", "Chorus"],
+    ] as const) {
+      chip(clicked).onClick();
+      h.render(project);
+      assertEditing(editing);
+    }
+    vi.advanceTimersByTime(300);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(h.player.seek).not.toHaveBeenCalled();
+  });
+
+  it("restores the last chip through the disclosure and ignores capture shortcuts while hidden", () => {
+    const { h, project, fetch } = setup();
+    const chip = (name: string) => h.control(node => node.props["aria-label"] === `Edit ${name}`);
+    const disclosure = () => h.control(node => node.type === "button" &&
+      node.props["aria-controls"] === `loop-editor-${project.id}`);
+    const press = keyboard(h);
+    chip("Chorus").onClick();
+    h.render(project);
+    disclosure().onClick();
+    h.render(project);
+    expect(disclosure()["aria-expanded"]).toBe(false);
+    expect(chip("Verse")["aria-pressed"]).toBe(false);
+    expect(chip("Chorus")["aria-pressed"]).toBe(false);
+    h.player.position.mockReturnValue(15);
+    expect(press("a").preventDefault).not.toHaveBeenCalled();
+    expect(press("b").preventDefault).not.toHaveBeenCalled();
+    h.render(project);
+    expect(loops(h)).toEqual(saved);
+    expect(fetch).not.toHaveBeenCalled();
+    disclosure().onClick();
+    h.render(project);
+    expect(disclosure()["aria-expanded"]).toBe(true);
+    expect(chip("Chorus")["aria-pressed"]).toBe(true);
+    expect(chip("Verse")["aria-pressed"]).toBe(false);
+    expect(boundary(h).defaultValue).toBe("0:12.120");
+    // Checkboxes remain independent even while no loop is being edited.
+    chip("Chorus").onClick();
+    h.render(project);
+    h.control(node => node.type === "input" &&
+      node.props["aria-describedby"] === "loop-description-second")
+      .onChange({ target: { checked: true } });
+    h.render(project);
+    expect(disclosure()["aria-expanded"]).toBe(false);
+    expect(chip("Chorus")["aria-pressed"]).toBe(false);
+    disclosure().onClick();
+    h.render(project);
+    expect(chip("Chorus")["aria-pressed"]).toBe(true);
+    expect(loops(h)).toEqual([saved[0], { ...saved[1], enabled: true }]);
+    chip("Chorus").onClick();
+    h.render(project);
+    expect(loops(h)).toEqual([saved[0], { ...saved[1], enabled: true }]);
+  });
+
+  it("separates editing selection from playback inclusion and keeps chips visible when collapsed", () => {
+    const { h, project } = setup();
+    const chip = (name: string) => h.control(node => node.props["aria-label"] === `Edit ${name}`);
+    const inclusion = (id: string) => h.control(node => node.type === "input" &&
+      node.props["aria-describedby"] === `loop-description-${id}`);
+    expect(inclusion("first")).toMatchObject({ checked: true,
+      "aria-label": "Include this passage in loop playback", title: "Include this passage in loop playback" });
+    chip("Chorus").onClick();
+    h.render(project);
+    expect(chip("Chorus")["aria-pressed"]).toBe(true);
+    expect(inclusion("second").checked).toBe(false);
+    expect(loops(h)).toEqual(saved);
+    inclusion("first").onChange({ target: { checked: false } });
+    h.render(project);
+    expect(chip("Chorus")["aria-pressed"]).toBe(true);
+    const disclosure = () => h.control(node => node.type === "button" &&
+      node.props["aria-controls"] === `loop-editor-${project.id}`);
+    expect(disclosure()["aria-expanded"]).toBe(true);
+    disclosure().onClick();
+    h.render(project);
+    expect(disclosure()["aria-expanded"]).toBe(false);
+    expect(() => boundary(h)).toThrow();
+    expect(() => h.button("Delete loop")).toThrow();
+    expect(chip("Chorus")["aria-pressed"]).toBe(false);
+    chip("Chorus").onClick();
+    h.render(project);
+    expect(disclosure()["aria-expanded"]).toBe(true);
+    expect(boundary(h).defaultValue).toBe("0:12.120");
+    const chipHtml = renderToStaticMarkup(chip("Chorus").children);
+    expect(chipHtml).toContain("8.00s");
+    expect(chipHtml).not.toContain("0:12.120");
+    expect(h.control(node => node.props.id === "loop-description-second").children.join(""))
+      .toContain("Start (A) 0:12.120, End (B) 0:20.120");
+    h.button("Delete loop").onClick();
+    h.render(project);
+    expect(loops(h)).toEqual([{ ...saved[0], enabled: false }]);
+    h.control(node => node.props["aria-label"] === "Edit Verse").onClick();
+    h.render(project);
+    disclosure().onClick();
+    h.render(project);
+    h.click("Add loop");
+    h.render(project);
+    expect(disclosure()["aria-expanded"]).toBe(true);
+    expect(h.control(node => node.props["aria-label"] === "Loop name").defaultValue).toBe("Loop 1");
+  });
 
   it("opens compact loop guidance from an accessible trigger and closes on re-trigger or Escape", () => {
     const { h, project, fetch } = setup();
@@ -1567,6 +1810,8 @@ describe("optional practice loop snapping (stepped hooks, no DOM)", () => {
       .filter((child: any) => child?.props).map((child: any) => child.props.className))
       .toEqual(["loop-controls", "saved-loops"]);
     expect(loops(h)).toEqual([saved[1]]);
+    h.control(node => node.props["aria-label"] === "Edit Chorus").onClick();
+    h.render(project);
     h.control(node => node.props["aria-label"] === "Delete Chorus").onClick();
     h.render(project);
     expect(loops(h)).toEqual([]);
@@ -1644,7 +1889,7 @@ describe("optional practice loop snapping (stepped hooks, no DOM)", () => {
     expect(loops(h)[0].a).toBe(2);
     h.control(node => node.props["aria-label"] === "Seek").onChange({ target: { value: "3.83" } });
     h.render(project);
-    h.control(node => node.props.title === "Set loop start at playhead").onClick();
+    h.control(node => node.props.title === "Set loop start at playhead (A)").onClick();
     h.render(project);
     expect(loops(h)[0].a).toBe(4);
     edit(h, "4", "end");
