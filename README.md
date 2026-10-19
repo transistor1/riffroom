@@ -1,6 +1,6 @@
 # Riffroom: turn a song into a backing track you can play with.
 
-![Riffroom stem mixer and practice view](docs/images/riffroom-separation.png)
+![Riffroom six-stem mixer with guitar muted and independent instrument levels](docs/images/riffroom-separation.jpg)
 
 I built Riffroom for my own guitar practice and am sharing it in case you'd like to play with it too. Open a song, split it into instruments, then turn the guitar down or off and play along—or solo it to hear the part you're learning. Loop a tricky passage, slow it down without detuning, or transpose it to match your guitar. It all runs locally, with a mixer in your browser.
 
@@ -10,22 +10,23 @@ I built Riffroom for my own guitar practice and am sharing it in case you'd like
 
 ### Bring in a song and choose how to split it
 
-![Riffroom import screen with local separation model choices](docs/images/riffroom-new-session.png)
+![Riffroom import screen with local separation model choices](docs/images/riffroom-new-session.jpg)
 
 Drop in an audio file, start with the recommended six-stem model, or choose a specialist for the part you want to practice. You can run another model later without importing the song again.
 
 ### Turn the hard parts into a practice session
 
-![Riffroom playback timeline with saved loops, speed and pitch controls, and stem mixer](docs/images/riffroom-practice-loops.png)
+![Riffroom loop editor with playhead capture, one-beat nudges, beat snapping, count-in, speed and pitch controls](docs/images/riffroom-practice-loops.jpg)
 
-Save passages such as a chorus or solo, enable the ones you want, and cycle through them in timeline order. Slow the song down, change pitch, mute the guitar, or solo any combination of stems.
+Save passages such as a chorus or solo, enable the ones you want, and cycle through them in timeline order. Slow the song down, change pitch, choose the instrument you play, and mute or solo it. Use beat-snapped boundaries and one-beat nudges to refine a passage, then add a count-in and click once beat analysis is ready.
 
 ## What Riffroom does
 
 - **Make a backing track:** mix guitar, vocals, drums, bass, piano and other instruments with the six-stem options. Each separated part is called a *stem*.
-- **Listen closely:** solo the guitar, mute another instrument, or combine solos to hear how parts fit together.
+- **Choose your part:** select an available instrument for the play-with-the-band and hear-just-that-part shortcuts, or combine manual solos to hear how parts fit together.
 - **Work on a passage:** save and cycle through multiple practice loops, change speed while preserving tuning, and adjust pitch independently.
-- **Start in time:** automatically analyze the original mix for a musical beat/downbeat grid, choose a one-to-four-bar count-in, and optionally keep the click running.
+- **Start in time:** automatic local AI beat/downbeat analysis prepares a 1–4 bar count-in and optional click with its own volume control.
+- **Choose the beat grid:** Auto applies confident timing repairs when available; Raw uses the original analysis. The experimental correction engine preserves the source grid.
 - **Compare splitting methods:** keep multiple results for a song and switch between them and the original.
 - **Keep your practice local:** save songs and results on your computer and download individual stems as WAV files. No account, API key, paid service or cloud upload is needed.
 
@@ -35,10 +36,10 @@ Song splitting is approximate: expect some instrument bleed and artifacts, espec
 
 1. Choose a model, then drag an audio file into the window or click **Choose a track**.
 2. Separation runs in the background; you can listen to the original while waiting. The library shows its status. One job runs at a time to limit GPU memory use.
-3. **Play guitar with the band** mutes the guitar. **Hear just the guitar** solos it.
+3. Use the arrow beside **Play guitar with the band** to choose an available instrument. The shortcuts update to your choice: **Play guitar with the band** mutes the guitar; **Hear just the guitar** solos it. Click an active shortcut again to restore the previous mix.
 4. Use each stem's **M**, **S**, and volume slider. Volume runs from 0–200%; the master sets overall output. Multiple solos work together; mute takes precedence.
-5. Seek to a passage and click **Add loop**. Name it, edit start/end as seconds or **m:ss.mmm**, or nudge either boundary by **±0.1s**. Select the loops you want and enable **Loop** to cycle through them in timeline order, skipping gaps. Space plays/pauses, and arrow keys skip five seconds when you aren't editing a control.
-6. Beat analysis starts automatically during import (or when opening an older song without an analysis). When ready, choose a 1–4 bar count-in (or Off) and optionally enable **Click**. Count-in preserves the exact playhead or loop boundary; it does not snap or move it. Pausing and resuming does not count in again.
+5. Seek to a passage and click **Add loop**. Click a saved loop’s name to open its editor below the waveform. Capture Start/End at the playhead, type exact times, or nudge boundaries with optional **Snap to beat**. Select passage checkboxes and enable **Loop** to cycle in timeline order, skipping gaps. See [Practice loop editing](#practice-loop-editing).
+6. When automatic beat analysis is ready, choose **Count-in** Off or 1–4 bars, enable **Click** to keep time during playback, and adjust **Click level** independently. See [Metronome and count-in](#metronome-and-count-in) and [Beat correction (experimental)](#beat-correction-experimental).
 7. Try another model from the bottom of the track page. Each completed root run remains available in **Listening to**, alongside the original.
 8. Use **Split further** on a stem to run another visible, compatible model on that part. The child stems replace
    their parent in the mixer; use the split selector to return to the unsplit parent or choose another saved split.
@@ -46,7 +47,36 @@ Song splitting is approximate: expect some instrument bleed and artifacts, espec
    from an earlier stage carries into every later stage.
 9. Use a stem's download arrow to save its WAV file.
 
-Mix levels, mutes, and solos are remembered per result in this browser. Track audio and all completed separation results persist on disk. Named loops and their selection checkboxes are saved with the song and shared across results. Loop mode defaults off each time the mixer opens. Play position, speed, and master output reset when changing results. Speed changes tempo while preserving tuning, and the Pitch control transposes playback independently.
+Mix levels, mutes, and solos are remembered per result in this browser. Track audio and all completed separation results persist on disk. Named loops and their selection checkboxes are saved with the song and shared across results. Loop mode defaults off each time the mixer opens. Speed and pitch are remembered per song in this browser, across results and reloads. Play position and master output reset when changing results. Speed changes tempo while preserving tuning, and the Pitch control transposes playback independently.
+
+### Practice loop editing
+
+Click **Add loop** to create a passage near the playhead. Click a saved passage’s name to select it for editing; click it again, or use the editor’s disclosure button, to collapse the controls. The passage checkboxes independently choose which loops play when **Loop** is on.
+
+- **Start (A) / End (B):** type seconds or **m:ss.mmm** and press Enter or leave the field. Typed times stay exact even with snapping enabled, within the song and the opposite boundary.
+- **Set start/end at playhead:** capture the current playback position. Press **A** for Start or **B** for End when a loop editor is open and focus is outside form controls. An invalid capture leaves the loop unchanged.
+- **Snap to beat:** off by default and remembered per song in this browser. When on, new loop boundaries and playhead captures align to the selected beat grid; the nudge buttons move to the previous/next legal beat. With snapping off, nudges move by **±0.1 seconds**.
+- **Grid availability:** snapping follows **Grid → Auto / Raw**, including a corrected grid when Auto applies one. Without a usable selected grid, beat nudges are disabled and other edits remain free. Beat nudges stop at the last legal beat rather than crossing the other boundary.
+
+The **?** button opens loop help. **Space** plays/pauses and **← / →** seek five seconds outside form controls. Count-in leads into the saved boundary exactly; it does not snap it again.
+
+### Metronome and count-in
+
+Local AI analysis of the original mix starts automatically on import and on first open of an older song without analysis. It runs in the background without blocking normal playback or stem separation. Ready grids are cached and reused across reloads and separation results. Failed or interrupted analysis requires an explicit **Retry** after fixing the cause; reopening does not restart it. See [optional beat tracking setup](#optional-beat-tracking-setup).
+
+Once ready, choose **Count-in** Off or **1–4 bars**. Count-in works even with **Click** off; Click keeps the metronome running during playback, including loops. **Click level** adjusts click volume from **0–200%** in 5% steps, independently of the music master. Click and music pass through the same SoundTouch tempo processing to stay synchronized when speed changes.
+
+Count-in leads into the exact playback start: it does not snap the playhead or shift a loop boundary to a beat. Loop mode still selects the next enabled loop when the playhead is outside one. Pausing cancels queued clicks; resuming continues without another count-in, including when paused during pre-roll.
+
+### Beat correction (experimental)
+
+Open **Grid** beside the click controls to choose **Auto** or **Raw**. **Auto** is the default for songs without a saved choice: it applies a conservative repair only when the engine finds one confidently, otherwise it uses the raw grid. **Raw** bypasses correction and uses the original analysis. The browser remembers the choice per song across reloads and separation results, including previously saved preferences.
+
+The menu separates your chosen mode from the engine decision and shows whether playback uses a corrected or raw grid. **Advanced details** includes the analysis model and time signature. Correction uses existing analysis without reanalysis, audio edits, or overwriting the original timestamps or downbeats.
+
+Correction does **not** solve downbeat/accent interpretation or all odd or changing-meter problems. Listening validation remains limited, primarily to **Easy Lover** and **Reelin’ in the Years**; broader testing is still needed. See [diagnostic evidence and limits](docs/easy-lover-beat-grid-diagnostic.md#preserved-listening-baseline).
+
+While Auto is preparing, or if correction fails, click and count-in are unavailable; music remains playable. Choose **Raw** to use the original grid, or use **Retry correction** in the Grid menu after a failure. Switching grids cancels queued clicks and continues at the current position without a new count-in.
 
 ## Get started
 
@@ -108,26 +138,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1 -Check
 
 Uploads are limited to **512 MB and 20 minutes**. Decoded audio and stems use substantially more memory and disk than an MP3. The browser holds the selected result in memory, so shorter tracks and fewer tabs help on a 16 GB machine. A full song can take several minutes on an M1; progress reports stages, not a promised completion time.
 
-### Optional beat tracking and click
+### Optional beat tracking setup
 
-The click grid uses [CPJKU Beat This!](https://github.com/CPJKU/beat_this) locally. It analyzes the decoded original/full mix, so the grid remains on the song timeline when takes or nested stems change. Install the optional dependency in Riffroom's environment:
+The metronome uses [CPJKU Beat This!](https://github.com/CPJKU/beat_this) locally on the decoded original/full mix. Install its optional dependencies in the project’s `.env` environment, from the project folder:
 
 ```bash
+# macOS / Linux
 .env/bin/python -m pip install -e '.[beats]'
 ```
 
-The first automatic analysis loads the official `final0` checkpoint and may download its roughly 78 MB weights into PyTorch's user cache; analysis is queued during import, independently of playback and stem separation. Older songs without analysis start once when opened. Ready results are reused, including after reloads; failures and interrupted jobs require the compact **Retry** control and never retry automatically on open. Set `RIFFROOM_BEAT_MODEL` to a local checkpoint path to use pre-provisioned weights or another Beat This! checkpoint. Analysis runs offline after weights are present and stores only timestamps plus model/version/provenance in the song manifest. Deleting a song removes its grid with the manifest but deliberately retains shared cached weights. Beat This! and its published weights are MIT licensed.
+```powershell
+# Windows (PowerShell)
+.\.env\Scripts\python.exe -m pip install -e ".[beats]"
+```
 
-Beat tracking is optional and CPU-based in this integration, so the same path is intended for macOS, Windows, and Linux wherever Beat This!'s PyTorch/torchaudio dependencies install successfully; this does not claim completed validation on every platform. If the package, checkpoint, or inference is unavailable, Riffroom records an explicit error and leaves count-in/click controls unavailable. It never substitutes a fixed-BPM metronome or fabricated result. A valid grid may be phase-extended backward solely to schedule pre-roll before a sparse intro; persisted analysis timestamps are never modified.
+Restart Riffroom after installation, then use **Retry** for a song whose analysis failed before setup. The first analysis may download the official `final0` checkpoint (roughly 78 MB) into PyTorch’s user cache. Set `RIFFROOM_BEAT_MODEL` before launch to a local checkpoint path for pre-provisioned weights or another Beat This! checkpoint. After weights are present, analysis runs offline and stores timestamps plus model/version/provenance in the song manifest. Deleting a song removes its grid but retains shared cached weights. Beat This! and its published weights are MIT licensed.
 
-The experimental **Beat correction** toggle defaults off and remembers your
-explicit choice per song in this browser. It proposes a conservative repair from
-stored Beat This! analysis without reanalysis or changing the source data.
-The original grid and downbeats are preserved; downbeat correction is not solved.
-Hover the toggle for applied, no-repair, pending, or failure details; these states
-also have an accessible description. If enabled correction is pending or fails,
-click and count-in are unavailable until correction is turned off or succeeds.
-**Retry correction** remains visible on failure. See [usage, test-worktree launch, and validation limits](docs/experimental-beat-correction.md).
+This integration uses CPU inference and is intended for macOS, Windows, and Linux wherever the PyTorch/torchaudio dependencies install successfully; it has not been validated on every platform. Missing dependencies, unavailable checkpoints, or inference errors leave count-in/click unavailable, with an explicit error rather than a fixed-BPM substitute. Count-in may extend a valid grid’s phase backward for pre-roll before a sparse intro; it never changes persisted timestamps. For normal use, see [Metronome and count-in](#metronome-and-count-in); optional correction is [a separate step](#beat-correction-experimental).
 
 ### LAN access / testing another computer
 
@@ -221,6 +248,8 @@ The browser test imports an original synthetic fixture, runs the real default ML
 - **First separation is slow:** weights need to download and convert once. Leave the server running.
 - **Older Demucs stems sound buzzy/noisy:** the original cached-weight loader had a bug, now fixed. Select Demucs and click **Separate track** again; existing WAVs cannot be repaired in place. New workers load the corrected adapter automatically.
 - **Job fails:** open its diagnostic log in the track page. Try again, or use Demucs six stems if RoFormer exhausts memory.
+- **Click/count-in unavailable:** queued or running analysis shows its status. For failed or interrupted analysis, install the optional beats dependency or resolve the displayed error, then click **Retry**. If Auto correction is preparing or failed, choose **Grid → Raw** to use the original grid, or click **Retry correction** in the Grid menu after failure.
+- **Click sounds wrong:** check **Click level** and compare **Grid → Auto** with **Raw**. Correction may leave timing unchanged and cannot establish correct bar accents; see [its limits](#beat-correction-experimental).
 - **No sound:** press Play, check master/mute/solo controls and your computer's output device. Browser audio needs a user click.
 - **Server was closed:** run your platform’s launcher again. Interrupted jobs are marked for retry; finished results remain.
 - **Port 8765 in use:** the launcher reuses Riffroom if it owns the port; otherwise it asks you to stop the other app.
