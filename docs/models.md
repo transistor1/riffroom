@@ -193,9 +193,42 @@ Windows candidate. The existing setup script still installs the full Apple stack
 
 ## Lead/rhythm guitar
 
-The released profiles here target instrument classes, not musical roles. They cannot reliably label a solo guitar separately from simultaneously playing rhythm guitars. The [Demucs lead/rhythm discussion](https://github.com/facebookresearch/demucs/issues/588) illustrates that this requires a different training target. We did not establish a dependable local open checkpoint for that target during this research. Commercial services may offer role separation, but they do not satisfy this app's local-only requirement.
+The curated `listra92-lead-rhythm` profile uses Mel-Band RoFormer to split an existing guitar stem.
+Choose it in the guitar channel's existing **Split further** menu; the existing run lineage, child
+selection, parent replacement, collapse and mixer controls apply without a separate workflow.
+It produces `lead` and `rhythm`. The author's config has `num_stems: 1`, instruments `[Lead, Rhythm]`
+and target `Lead`: lead is a learned prediction and rhythm is the upstream runtime's residual.
+Use a guitar stem as input; on a full mix the residual will also contain other instruments.
+Role separation quality varies with arrangement; a synthetic execution check does not establish quality.
 
-No stereo-center subtraction, EQ split, or duplicated guitar output is presented as lead/rhythm separation. A future model can add new named stems without changing the mixer engine.
+Authoritative artifacts are in [listra92/MyModels](https://huggingface.co/listra92/MyModels/tree/aae55d81e0bce315bcb17bcf46c40f23cce41f5b/misc),
+pinned at `aae55d81e0bce315bcb17bcf46c40f23cce41f5b`:
+
+- Checkpoint `misc/model_mel_band_roformer_ep_72_sdr_3.2232.ckpt`, 337,073,664 bytes,
+  SHA-256 `b3c47bca33609ca1ba0bb2d2076410bfd1eb941b051b72afc1f3e24d12b17eef`.
+- Config `misc/config_mel_band_roformer_Lead_Rhythm_Guitar.yaml`, SHA-256
+  `fc47975bba58b7b4c6de363bfe158943092c77bfb0b9a41c0c741eafba330359`.
+
+The [MVSep-less mirror](https://huggingface.co/noblebarkrr/mvsepless_resources/tree/283025218e6447db47da1ad18df3c2f67ca8d66d/mel_band_roformer)
+attributes the checkpoint to listra92 and exposes the identical checkpoint LFS SHA-256 under
+`mbr_lead_rhythm_guitar_listra92.ckpt`. Its config changes inference batching/overlap; Riffroom downloads
+the author's original config and applies only batch size 1 / overlap 2 for inference memory and overlap.
+The author's repository card declares `openrail++`; no checkpoint-specific license text or grant was
+found. Riffroom therefore reports terms as **unverified**, does not call the weights MIT or unrestricted,
+and downloads them on demand rather than redistributing them.
+
+The managed `audio-separator==0.47.0` runtime supports this Mel-Band architecture, two instrument names
+and residual inference, but its bundled model registry lacks this exact checkpoint/config. The narrowly
+scoped `providers/listra92.py` adapter runs using Python beside the selected audio-separator executable.
+It overrides the trusted download lookup and delegates loading and inference to upstream MDXC.
+The 0.47.0 Mel-Band constructor omits `mlp_expansion_factor` when creating its mask estimators,
+silently retaining factor 4 despite this author's factor 2 config. The adapter scopes a constructor
+correction to this isolated model load, then restores the original constructor. The checkpoint's
+`[768, 384]` first mask weight confirms factor 2; strict state-dictionary loading is preserved.
+Both downloads are revision-pinned, SHA-256 checked (including cache hits), and atomically published.
+No Sound Razor dependency, new runtime installation recipe, alternate UI, arbitrary URL or config input
+is introduced. Apple Silicon is the supported host; Windows x86-64 remains experimental until a real
+Windows execution is recorded. Other models retain their existing provider routing.
 
 ## Weight management
 

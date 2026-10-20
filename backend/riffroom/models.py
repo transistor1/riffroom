@@ -226,6 +226,27 @@ CURATED_MODELS = {
             ("bs_mega_53stem_acoustic-guitar_mvsep.ckpt", "bs_mega_53stem_acoustic-guitar_mvsep_config.yaml"),
         ),
         ModelProfile(
+            "listra92-lead-rhythm",
+            "Mel-Band RoFormer · listra92 lead / rhythm guitar",
+            ("lead", "rhythm"),
+            "Split an existing guitar stem into lead and rhythm using Split further. "
+            "Lead is predicted; rhythm is the remaining audio. Results depend on the arrangement. "
+            "Author repository declares OpenRAIL++; checkpoint-specific terms are unverified.",
+            "Lead / rhythm guitar",
+            "Author repository: OpenRAIL++; checkpoint-specific terms unverified",
+            "https://huggingface.co/listra92/MyModels",
+            "RoFormer",
+            "unverified",
+            (ExecutionVariant(
+                PORTABLE_PROVIDER,
+                "listra92_mel_band_roformer_lead_rhythm.ckpt",
+                ("macos-arm64",),
+                True,
+                ("windows-x86_64",),
+            ),),
+            ("listra92_mel_band_roformer_lead_rhythm.ckpt", "listra92_mel_band_roformer_lead_rhythm.yaml"),
+        ),
+        ModelProfile(
             "demucs-ft",
             "Demucs · detailed 4 stems",
             ("vocals", "drums", "bass", "other"),

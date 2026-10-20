@@ -208,13 +208,17 @@ def test_model_catalog_exposes_provider_terms_and_compatibility(application):
         "mvsep-guitar",
         "mvsep-electric-guitar",
         "mvsep-acoustic-guitar",
+        "listra92-lead-rhythm",
         "demucs-ft",
         "roformer-vocals",
     ]
     assert community
     assert models == curated + community
     mlx_available = is_provider_available("mlx-audio-separator")
-    assert {model["provider"] for model in curated} == {"mlx-audio-separator" if mlx_available else None}
+    assert {model["provider"] for model in curated if model["id"] != "listra92-lead-rhythm"} == {
+        "mlx-audio-separator" if mlx_available else None
+    }
+    assert next(model for model in curated if model["id"] == "listra92-lead-rhythm")["provider"] is None
     assert all(
         model["provider"] is None for model in community if model["provider_options"] == ["audio-separator"]
     )
@@ -287,7 +291,8 @@ def test_portable_allowlist_routing_cleanup_and_runtime_compatibility(applicatio
         for model in portable_models
         for variant in model.variants
         if variant.provider_id == "audio-separator"
-    } == {*VALIDATED_PORTABLE_VARIANTS, *PORTABLE_CANDIDATE_VARIANTS}
+    } == {*VALIDATED_PORTABLE_VARIANTS, *PORTABLE_CANDIDATE_VARIANTS,
+          "listra92_mel_band_roformer_lead_rhythm.ckpt"}
     assert pilot.name == "MDX-Net Model: UVR-MDX-NET Inst HQ 5"
     assert pilot.stems == ("instrumental", "vocals")
     assert all(
@@ -410,6 +415,7 @@ def test_curated_profiles_are_unchanged_and_community_order_is_deterministic(app
         ("mvsep-guitar", "bs_mega_53stem_guitar_mvsep.ckpt", ["guitar", "other"]),
         ("mvsep-electric-guitar", "bs_mega_53stem_electric-guitar_mvsep.ckpt", ["electric-guitar", "other"]),
         ("mvsep-acoustic-guitar", "bs_mega_53stem_acoustic-guitar_mvsep.ckpt", ["acoustic-guitar", "other"]),
+        ("listra92-lead-rhythm", "listra92_mel_band_roformer_lead_rhythm.ckpt", ["lead", "rhythm"]),
         ("demucs-ft", "htdemucs_ft.yaml", list(CURATED_MODELS["demucs-ft"].stems)),
         ("roformer-vocals", "vocals_mel_band_roformer.ckpt", ["vocals", "instrumental"]),
     ]

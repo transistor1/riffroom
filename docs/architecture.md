@@ -241,7 +241,10 @@ CLI switch and automatically selects CUDA from `torch.cuda.is_available()`, othe
 Linux and Intel macOS remain outside this capability. Launcher support alone does
 not certify inference support.
 
-A lead/rhythm model would declare `lead_guitar` and `rhythm_guitar` stems. The mixer accepts arbitrary names; add display labels/icons and choose how the guitar presets target the new names.
+The listra92 lead/rhythm profile declares `lead` and `rhythm` stems and uses the existing chained
+separation flow. The mixer replaces the selected guitar parent with its active children and preserves
+their guitar family identity for practice controls. Its small managed-runtime adapter supplies a pinned
+checkpoint/config lookup to audio-separator's existing MDXC implementation; it adds no separate UI.
 
 ## Practical tradeoffs
 

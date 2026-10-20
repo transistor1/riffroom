@@ -74,7 +74,8 @@ All profiles are cached on this machine. The final writer saves float WAVs witho
 
 ## Known limits
 
-- No lead/rhythm role separation; every included guitar model returns all guitars together.
+- General guitar models return all guitars together. The listra92 specialist now targets lead/rhythm
+  through the existing guitar stem Split further flow; musical separation quality still needs listening evaluation.
 - Speed changes pitch; no pitch-preserving time-stretch engine yet.
 - Browser buffers hold the selected result in memory. Large tracks use substantial RAM.
 - Loop points and transport state reset on result changes; saved channel mix levels/mutes/solos survive browser reloads.
@@ -270,3 +271,52 @@ Worker validation did not install packages, download models, or change CUDA driv
 - `.env/bin/ruff check backend scripts`: passed.
 - `npm run build --prefix frontend`: passed.
 - `git diff --check`: passed.
+
+
+## listra92 lead/rhythm worker validation — 2026-10-19
+
+`curl -I https://huggingface.co` returned HTTP/2 200. Author API metadata, the original
+checkpoint/config and mirror LFS metadata were inspected; pinned hashes are recorded in
+[models.md](models.md#leadrhythm-guitar). Both original artifacts downloaded and passed SHA-256 checks.
+
+The full `riffroom.worker` path ran with the existing managed audio-separator 0.47.0 Python on this
+Apple Silicon Mac, using CPU (no MPS/CUDA validation). The two-second, generated stereo float WAV
+produced `lead.wav`, `rhythm.wav` and `stems.json`; both outputs contain 88,200 stereo frames at
+44,100 Hz, finite nonzero samples and FLOAT subtype. The worker's alignment validation passed.
+This proves execution and file integration, not musical separation quality. Windows remains experimental.
+The adapter needed isolated imports and a model-scoped mask expansion correction; no installed runtime
+files or dependency recipes were edited.
+
+Validation commands and outcomes:
+
+- `.env/bin/pytest -q backend/tests/test_listra92.py backend/tests/test_models.py backend/tests/test_providers.py backend/tests/test_jobs.py backend/tests/test_app.py --basetemp=.verification/pytest`: **187 passed**.
+- `.env/bin/pytest -q --basetemp=.verification/pytest-all`: **371 passed, 4 skipped, 1 failed**.
+  The failure is `test_read_only_correction_from_stored_analysis[easy_lover_approved_groove.json-applied]`
+  in `backend/tests/test_beat_correction.py:49`, an Easy Lover beat-grid fixture mismatch in untouched code.
+  An isolated rerun with `.env/bin/pytest -q backend/tests/test_beat_correction.py -k easy_lover_approved --basetemp=.verification/pytest-beat`
+  reproduced it. No beat code or fixture was changed.
+- `npm test --prefix frontend`: **203 passed**.
+- `npm run build --prefix frontend`: **passed**.
+- `.env/bin/ruff check backend/riffroom/models.py backend/riffroom/providers/audio_separator.py backend/riffroom/providers/listra92.py backend/tests/test_listra92.py backend/tests/test_app.py`: **passed**.
+- `git diff --check`: **passed**.
+
+The inference command was:
+
+```sh
+PYTHONPATH=backend \
+RIFFROOM_AUDIO_SEPARATOR_BIN="$PWD/data/runtimes/audio-separator/venv/bin/audio-separator" \
+XDG_CACHE_HOME="$PWD/.verification/runtime-cache" \
+TORCH_HOME="$PWD/.verification/runtime-cache/torch" \
+NUMBA_CACHE_DIR="$PWD/.verification/runtime-cache/numba" \
+MPLCONFIGDIR="$PWD/.verification/runtime-cache/matplotlib" \
+.env/bin/python -m riffroom.worker \
+  "$PWD/.verification/listra92/source.wav" \
+  "$PWD/.verification/listra92/output" \
+  "$PWD/.verification/listra92/cache" \
+  listra92-lead-rhythm audio-separator
+```
+
+The successful log, generated audio, downloaded artifacts and backend test log were retained under
+`.cache/listra92-verification/` after validation (moved from `.verification/`, all within this worker root).
+No Git staging, commit, branch change, merge or push was performed. The data symlink and `tunnel.sh`
+were not modified.

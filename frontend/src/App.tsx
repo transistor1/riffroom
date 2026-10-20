@@ -983,9 +983,9 @@ export default function App() {
               <div className="guitar-note">
                 <Guitar size={16} />
                 <span>
-                  Guitar stems contain lead and rhythm together. Separating
-                  those reliably is still an open challenge for the local models
-                  included here.
+                  To split a guitar stem into lead and rhythm, choose the
+                  listra92 model in that stem’s Split further menu. Enable it
+                  in Manage models if needed. Results depend on the arrangement.
                 </span>
               </div>
             </>

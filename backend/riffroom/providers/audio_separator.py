@@ -10,6 +10,7 @@ from typing import Protocol
 
 from riffroom.models import ExecutionVariant, ModelProfile
 from riffroom.providers.base import normalized_stem_paths
+from riffroom.providers.listra92 import MODEL_ID
 
 _UNAVAILABLE_MESSAGE = (
     "The portable audio-separator runtime is not installed/configured. "
@@ -55,6 +56,16 @@ class AudioSeparatorCliProvider:
         """Report whether the separately managed CLI runtime can be invoked."""
         return self._executable() is not None
 
+    @staticmethod
+    def _runtime_python(executable: str) -> Path:
+        """Use the selected CLI's environment, including Windows console launchers."""
+        directory = Path(executable).absolute().parent
+        candidates = (directory / "python.exe", directory / "python", directory / "python3")
+        for candidate in candidates:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+        raise RuntimeError("The listra92 model requires Python beside the selected audio-separator executable.")
+
     def separate(
         self,
         profile: ModelProfile,
@@ -99,6 +110,13 @@ class AudioSeparatorCliProvider:
             "--custom_output_names",
             json.dumps(output_names, sort_keys=True, separators=(",", ":")),
         ]
+        if profile.id == MODEL_ID:
+            argv = [
+                str(self._runtime_python(executable)),
+                "-I",  # Keep this directory's audio_separator.py out of runtime imports.
+                str(Path(__file__).with_name("listra92.py")),
+                str(source), str(output), str(cache),
+            ]
         on_model_loaded()
         try:
             result = self._runner(argv, check=False, shell=False)
