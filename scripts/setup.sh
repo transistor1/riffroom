@@ -29,6 +29,8 @@ FINGERPRINT_FILES=(
   frontend/package.json
   frontend/package-lock.json
   scripts/setup.sh
+  backend/riffroom/beat_runtime.py
+  scripts/requirements-beats-lock.txt
 )
 
 setup_fingerprint() {
@@ -344,6 +346,9 @@ if ! .env/bin/python -m pip install -r requirements-lock.txt -e '.[dev]'; then
 fi
 
 echo
+echo "Setting up beat tracking..."
+.env/bin/python backend/riffroom/beat_runtime.py --install
+
 echo "Installing and building Riffroom's interface..."
 if ! npm ci --prefix frontend || ! npm run build --prefix frontend; then
   echo

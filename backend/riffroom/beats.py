@@ -2,13 +2,18 @@
 
 import asyncio
 import importlib.util
+import json
 import math
 import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Callable
 
+from riffroom import beat_runtime
+from riffroom.jobs import _process_group_kwargs, _terminate_process
 from riffroom.store import Store
 
 BEAT_MODEL = os.environ.get("RIFFROOM_BEAT_MODEL", "final0")
@@ -68,9 +73,48 @@ class BeatJobs:
     ):
         self.store = store
         self.runner = runner
-        self.available = available
+        self.data = store.root.parent
+        self.available = lambda: available() or beat_runtime.ready(self.data)
+        if runner is run_beat_this:
+            self.runner = self._analyze
+        self.setup = self._setup
         self.tasks: dict[str, asyncio.Task] = {}
         self.slot = asyncio.Semaphore(1)
+
+    def _analyze(self, path, checkpoint):
+        if not beat_runtime.ready(self.data):
+            return run_beat_this(path, checkpoint)
+        result = subprocess.run(
+            [str(beat_runtime.python_path(beat_runtime.runtime_path(self.data))),
+             str(Path(beat_runtime.__file__)), "--audio", str(path), "--checkpoint", checkpoint],
+            capture_output=True, text=True,
+        )
+        if result.returncode:
+            detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "Unknown inference error"
+            raise RuntimeError(f"Beat analysis failed: {detail}")
+        grid = json.loads(result.stdout.strip().splitlines()[-1])
+        return grid["beats"], grid["downbeats"]
+
+    async def _setup(self, track_id):
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, str(Path(beat_runtime.__file__)), "--install", "--data", str(self.data),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            **_process_group_kwargs(),
+        )
+        try:
+            async for line in process.stdout:
+                phase = line.decode(errors="replace").strip()
+                if phase in {item[0] for item in beat_runtime.install_commands(beat_runtime.runtime_path(self.data))}:
+                    self.store.update(track_id, beat_analysis={
+                        "status": "processing", "message": phase + "…", "error": None,
+                        "setup_required": True,
+                    })
+            if await process.wait() or not self.available():
+                raise RuntimeError("Beat setup failed. Check internet access and free disk space, then retry setup. "
+                                   "For diagnostics, run your standard launcher from a terminal.")
+        finally:
+            if process.returncode is None:
+                await _terminate_process(process)
 
     def status(self) -> dict:
         return {
@@ -90,11 +134,12 @@ class BeatJobs:
                 return
             if status == "error" and not retry:
                 return
-            if not self.available():
+            if not self.available() and not retry:
                 self.store.update(track_id, beat_analysis={
                     "status": "error",
                     "message": "Beat analysis unavailable",
-                    "error": "Beat tracking is not installed. Install Riffroom's beat optional dependency, then Retry.",
+                    "error": "Beat tracking is not installed. Set up beat tracking to download its CPU dependencies.",
+                    "setup_required": True,
                 })
                 return
             track["beat_analysis"] = {
@@ -110,6 +155,13 @@ class BeatJobs:
             async with self.slot:
                 track = self.store.get(track_id)
                 analysis = dict(track["beat_analysis"])
+                if not self.available():
+                    if not beat_runtime.supported():
+                        raise RuntimeError("Beat setup supports Apple Silicon macOS, Windows x86-64 and Linux x86-64.")
+                    analysis.update(status="processing", message="Preparing beat tracking…", setup_required=True)
+                    self.store.update(track_id, beat_analysis=analysis)
+                    await self.setup(track_id)
+                analysis.pop("setup_required", None)
                 analysis.update(status="processing", message="Finding beats and downbeats")
                 self.store.update(track_id, beat_analysis=analysis)
                 source = self.store.directory(track_id) / "original.wav"
@@ -135,7 +187,7 @@ class BeatJobs:
                         "analysis_version": ANALYSIS_VERSION,
                         "provider": "CPJKU/beat_this",
                         "model": BEAT_MODEL,
-                        "package_version": _package_version(),
+                        "package_version": "1.1.0" if beat_runtime.ready(self.data) else _package_version(),
                         "source": "original_mix",
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     },
@@ -149,6 +201,7 @@ class BeatJobs:
                     beat_analysis={
                         "status": "error",
                         "message": "Beat analysis did not finish",
+                        "setup_required": not self.available(),
                         "error": str(exc),
                     },
                 )

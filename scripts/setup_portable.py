@@ -1,4 +1,4 @@
-"""Core-only source launcher for Linux and Windows; no system package changes."""
+"""Linux/Windows source setup: core app and isolated CPU beats; no system package changes."""
 
 import argparse
 import hashlib
@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 INPUTS = (
     "pyproject.toml", "requirements-core-lock.txt", "frontend/package.json",
     "frontend/package-lock.json", "scripts/setup_portable.py", "scripts/setup.sh",
+    "backend/riffroom/beat_runtime.py", "scripts/requirements-beats-lock.txt",
     "scripts/launch.py", "start.sh", "start.ps1", "Riffroom.ps1",
 )
 
@@ -101,6 +102,7 @@ def main():
         run([python, "-m", "pip", "install", "-r", "requirements-core-lock.txt"])
         run([python, "-m", "pip", "install", "--no-deps", "--no-build-isolation", "-e", "."])
         run([python, "-m", "pip", "check"])
+        run([python, "backend/riffroom/beat_runtime.py", "--install"])
         npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
         run([npm, "ci", "--prefix", "frontend"])
         run([npm, "run", "build", "--prefix", "frontend"])

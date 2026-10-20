@@ -26,6 +26,7 @@ export type BeatGrid = {
   time_signature: number;
 };
 export type BeatAnalysis = Partial<BeatGrid> & {
+  setup_required?: boolean;
   status: "queued" | "processing" | "ready" | "error";
   message: string;
   error: string | null;

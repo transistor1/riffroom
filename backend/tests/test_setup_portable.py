@@ -77,3 +77,20 @@ def test_powershell_launchers_expose_and_forward_lan_without_reimplementing_tls(
     assert "non-default -BindAddress" in launcher
     assert "certificate" not in wrapper.lower()
     assert "certificate" not in launcher.lower()
+
+
+def test_stale_setup_installs_shared_beats_before_stamping_ready(monkeypatch, tmp_path):
+    setup, _ = ready_setup(monkeypatch, tmp_path)
+    stamp = tmp_path / ".env/.riffroom-core-fingerprint"
+    stamp.unlink()
+    calls = []
+
+    def run(command):
+        assert not stamp.exists()
+        calls.append([str(arg) for arg in command])
+
+    monkeypatch.setattr(setup, "run", run)
+    monkeypatch.setattr(sys, "argv", ["setup_portable.py"])
+    assert setup.main() == 0
+    assert any(command[1:] == ["backend/riffroom/beat_runtime.py", "--install"] for command in calls)
+    assert stamp.read_text().strip() == "test"

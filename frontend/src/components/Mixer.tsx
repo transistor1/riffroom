@@ -584,6 +584,8 @@ export default function Mixer({
   const [beatRequestError, setBeatRequestError] = useState("");
   const [retryingBeats, setRetryingBeats] = useState(false);
   const beatAnalysis = track.beat_analysis;
+  const beatSetupRequired = beatAnalysis?.setup_required ||
+    (beatAnalysis?.status === "error" && beatAnalysis.error?.includes("Beat tracking is not installed"));
   useEffect(() => {
     if (beatAnalysis?.status) {
       setBeatRequestError("");
@@ -1269,17 +1271,18 @@ export default function Mixer({
                 </details>
               </div> : <div className="metronome-state">
                 {(beatAnalysis?.status === "queued" || beatAnalysis?.status === "processing") &&
-                  <small role="status">{beatAnalysis.status === "queued" ? "Beats queued…" : "Analyzing beats…"}</small>}
+                  <small role="status">{beatAnalysis.setup_required ? beatAnalysis.message : beatAnalysis.status === "queued" ? "Beats queued…" : "Analyzing beats…"}</small>}
                 {beatAnalysis?.status === "error" && <>
                   <small role="status">{beatAnalysis.error || "Beat analysis failed. Retry when ready."}</small>
+                  {beatSetupRequired && <small>Downloads CPU beat tracking in a separate environment. Internet access and disk space are required. Setup continues with this song automatically.</small>}
                   <button className="small-button" disabled={retryingBeats}
-                    aria-label="Retry beat analysis" onClick={() => {
+                    aria-label={beatSetupRequired ? "Set up beat tracking" : "Retry beat analysis"} onClick={() => {
                       setBeatRequestError("");
                       setRetryingBeats(true);
                       void api(`/tracks/${track.id}/beats`, { method: "POST" })
                         .catch(reason => setBeatRequestError(reason.message))
                         .finally(() => setRetryingBeats(false));
-                    }}>Retry</button>
+                    }}>{beatSetupRequired ? "Set up beat tracking" : "Retry"}</button>
                 </>}
               </div>}
               {beatRequestError && <small role="status">{beatRequestError}</small>}

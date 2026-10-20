@@ -1,3 +1,4 @@
+import asyncio
 import io
 import shutil
 import threading
@@ -1010,3 +1011,66 @@ def test_practice_count_ids_overlap_and_minimum(application):
     for value in ["NaN", "Infinity", "-Infinity"]:
         body = '{"loops":[{"id":"x","name":"X","a":0,"b":' + value + ',"enabled":true}]}'
         assert client.put(url, content=body, headers={"Content-Type": "application/json"}).status_code == 422
+
+
+def test_missing_beats_setup_continues_song_and_duplicate_retry_is_idempotent(application, monkeypatch):
+    import threading
+
+    app, client = application
+    monkeypatch.setattr("riffroom.beat_runtime.supported", lambda: True)
+    track = upload(client)
+    tid = track["id"]
+    assert track["beat_analysis"]["setup_required"] is True
+    entered, release = threading.Event(), threading.Event()
+    installs = []
+
+    async def setup(track_id):
+        installs.append(track_id)
+        entered.set()
+        await asyncio.to_thread(release.wait, 5)
+        app.state.beat_jobs.available = lambda: True
+
+    app.state.beat_jobs.setup = setup
+    app.state.beat_jobs.runner = lambda *_: ([0.01, 0.04, 0.08], [0.01])
+    try:
+        assert client.post(f"/api/tracks/{tid}/beats").status_code == 202
+        assert entered.wait(5)
+        progress = client.get(f"/api/tracks/{tid}").json()["beat_analysis"]
+        assert progress["status"] == "processing"
+        assert progress["setup_required"] is True
+        assert "Preparing beat tracking" in progress["message"]
+        client.post(f"/api/tracks/{tid}/beats")
+        client.post(f"/api/tracks/{tid}/beats/prepare")
+        assert installs == [tid]
+        assert client.get(f"/api/tracks/{tid}/original").status_code == 200
+    finally:
+        release.set()
+    ready = wait_for_beats(client, tid, "ready")["beat_analysis"]
+    assert ready["beats"] == [0.01, 0.04, 0.08]
+    assert not ready.get("setup_required")
+
+
+def test_beat_setup_failure_can_be_retried_without_reopening(application, monkeypatch):
+    app, client = application
+    monkeypatch.setattr("riffroom.beat_runtime.supported", lambda: True)
+    track = upload(client)
+    tid = track["id"]
+    calls = []
+
+    async def setup(track_id):
+        calls.append(track_id)
+        if len(calls) == 1:
+            raise RuntimeError("Package server unavailable; retry setup.")
+        app.state.beat_jobs.available = lambda: True
+
+    app.state.beat_jobs.setup = setup
+    app.state.beat_jobs.runner = lambda *_: ([0.01, 0.04], [0.01])
+    client.post(f"/api/tracks/{tid}/beats")
+    failed = wait_for_beats(client, tid, "error")["beat_analysis"]
+    assert failed["setup_required"] is True
+    assert "Package server" in failed["error"]
+    client.post(f"/api/tracks/{tid}/beats/prepare")
+    assert calls == [tid]
+    client.post(f"/api/tracks/{tid}/beats")
+    wait_for_beats(client, tid, "ready")
+    assert calls == [tid, tid]

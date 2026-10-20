@@ -1,0 +1,22 @@
+# Isolated CPU beat runtime; torch/torchaudio are installed from the CPU index
+# on Windows/Linux by beat_runtime.py, and from PyPI on macOS.
+torch==2.8.0
+torchaudio==2.8.0
+beat-this==1.1.0
+einops==0.8.1
+rotary-embedding-torch==0.9.1
+soxr==1.1.0
+numpy==2.2.6
+filelock==3.19.1
+typing_extensions==4.15.0
+sympy==1.14.0
+mpmath==1.3.0
+networkx==3.4.2
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+fsspec==2025.9.0
+setuptools==80.9.0
+# WAV decoder fallback for torchaudio builds without an audio I/O backend.
+soundfile==0.13.1
+cffi==1.17.1
+pycparser==2.23

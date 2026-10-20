@@ -62,7 +62,7 @@ The **?** button opens loop help. **Space** plays/pauses and **← / →** seek 
 
 ### Metronome and count-in
 
-Local AI analysis of the original mix starts automatically on import and on first open of an older song without analysis. It runs in the background without blocking normal playback or stem separation. Ready grids are cached and reused across reloads and separation results. Failed or interrupted analysis requires an explicit **Retry** after fixing the cause; reopening does not restart it. See [optional beat tracking setup](#optional-beat-tracking-setup).
+Local AI analysis of the original mix starts automatically on import and on first open of an older song without analysis. It runs in the background without blocking normal playback or stem separation. Ready grids are cached and reused across reloads and separation results. Failed or interrupted analysis requires an explicit **Retry** after fixing the cause; reopening does not restart it. See [beat tracking setup](#beat-tracking-setup).
 
 Once ready, choose **Count-in** Off or **1–4 bars**. Count-in works even with **Click** off; Click keeps the metronome running during playback, including loops. **Click level** adjusts click volume from **0–200%** in 5% steps, independently of the music master. Click and music pass through the same SoundTouch tempo processing to stay synchronized when speed changes.
 
@@ -138,23 +138,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Riffroom.ps1 -Check
 
 Uploads are limited to **512 MB and 20 minutes**. Decoded audio and stems use substantially more memory and disk than an MP3. The browser holds the selected result in memory, so shorter tracks and fewer tabs help on a 16 GB machine. A full song can take several minutes on an M1; progress reports stages, not a promised completion time.
 
-### Optional beat tracking setup
+### Beat tracking setup
 
-The metronome uses [CPJKU Beat This!](https://github.com/CPJKU/beat_this) locally on the decoded original/full mix. Install its optional dependencies in the project’s `.env` environment, from the project folder:
+Standard macOS, Windows and Linux launchers automatically install [CPJKU Beat This!](https://github.com/CPJKU/beat_this) into `data/runtimes/beat-tracking/venv` (under `RIFFROOM_DATA` when configured). This isolated CPU environment uses pinned dependencies in `scripts/requirements-beats-lock.txt`, with matching PyTorch/torchaudio 2.8.0. Windows/Linux use official CPU wheels; macOS uses PyPI wheels. The core lock and macOS MLX lock remain independent, and beat setup does not change the managed Windows CUDA separation engine. The `beats` Python extra remains available for custom environments but is no longer required for standard setup.
+
+For an older installation missing beat tracking, open a song and choose **Set up beat tracking** beside the metronome. Setup shows its current phase, then automatically analyzes that song. Failed setup can be retried with the same button; failed song analysis retains **Retry**. Reopening a failed song does not install packages or repeat inference. No app restart is needed. You can also rerun your normal launcher or run the shared installer from the project folder:
 
 ```bash
-# macOS / Linux
-.env/bin/python -m pip install -e '.[beats]'
+# macOS/Linux
+.env/bin/python backend/riffroom/beat_runtime.py --install
 ```
 
 ```powershell
-# Windows (PowerShell)
-.\.env\Scripts\python.exe -m pip install -e ".[beats]"
+# Windows
+.\.env\Scripts\python.exe backend/riffroom/beat_runtime.py --install
 ```
 
-Restart Riffroom after installation, then use **Retry** for a song whose analysis failed before setup. The first analysis may download the official `final0` checkpoint (roughly 78 MB) into PyTorch’s user cache. Set `RIFFROOM_BEAT_MODEL` before launch to a local checkpoint path for pre-provisioned weights or another Beat This! checkpoint. After weights are present, analysis runs offline and stores timestamps plus model/version/provenance in the song manifest. Deleting a song removes its grid but retains shared cached weights. Beat This! and its published weights are MIT licensed.
+First setup needs internet access and disk space for CPU PyTorch. Supported installer targets are Apple Silicon macOS, Windows x86-64, and Linux x86-64 with Python 3.11–3.13. Other architectures report that beat setup is unavailable and leave playback usable. Linux and fresh-host beat inference on all platforms still need validation; package compatibility does not establish end-to-end analysis quality.
 
-This integration uses CPU inference and is intended for macOS, Windows, and Linux wherever the PyTorch/torchaudio dependencies install successfully; it has not been validated on every platform. Missing dependencies, unavailable checkpoints, or inference errors leave count-in/click unavailable, with an explicit error rather than a fixed-BPM substitute. Count-in may extend a valid grid’s phase backward for pre-roll before a sparse intro; it never changes persisted timestamps. For normal use, see [Metronome and count-in](#metronome-and-count-in); optional correction is [a separate step](#beat-correction-experimental).
+The first analysis may download the official `final0` checkpoint (roughly 78 MB) into PyTorch’s user cache. Set `RIFFROOM_BEAT_MODEL` before launch to a local checkpoint path for pre-provisioned weights or another Beat This! checkpoint. After weights are present, analysis runs offline and stores timestamps plus model/version/provenance in the song manifest. Deleting a song removes its grid but retains shared cached weights. Beat This! and its published weights are MIT licensed.
+
+Missing dependencies, unavailable checkpoints, or inference errors leave count-in/click unavailable with an explicit error. Count-in may extend a valid grid’s phase backward for pre-roll before a sparse intro; it never changes persisted timestamps. For normal use, see [Metronome and count-in](#metronome-and-count-in).
 
 ### LAN access / testing another computer
 
@@ -248,7 +252,7 @@ The browser test imports an original synthetic fixture, runs the real default ML
 - **First separation is slow:** weights need to download and convert once. Leave the server running.
 - **Older Demucs stems sound buzzy/noisy:** the original cached-weight loader had a bug, now fixed. Select Demucs and click **Separate track** again; existing WAVs cannot be repaired in place. New workers load the corrected adapter automatically.
 - **Job fails:** open its diagnostic log in the track page. Try again, or use Demucs six stems if RoFormer exhausts memory.
-- **Click/count-in unavailable:** queued or running analysis shows its status. For failed or interrupted analysis, install the optional beats dependency or resolve the displayed error, then click **Retry**. If Auto correction is preparing or failed, choose **Grid → Raw** to use the original grid, or click **Retry correction** in the Grid menu after failure.
+- **Click/count-in unavailable:** queued or running analysis shows its status. For failed or interrupted analysis, choose **Set up beat tracking** if dependencies are missing, or resolve the displayed song error and click **Retry**. If Auto correction is preparing or failed, choose **Grid → Raw** to use the original grid, or click **Retry correction** in the Grid menu after failure.
 - **Click sounds wrong:** check **Click level** and compare **Grid → Auto** with **Raw**. Correction may leave timing unchanged and cannot establish correct bar accents; see [its limits](#beat-correction-experimental).
 - **No sound:** press Play, check master/mute/solo controls and your computer's output device. Browser audio needs a user click.
 - **Server was closed:** run your platform’s launcher again. Interrupted jobs are marked for retry; finished results remain.

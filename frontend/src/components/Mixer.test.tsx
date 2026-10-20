@@ -904,6 +904,45 @@ describe("beat grid mode controls", () => {
 
 
 describe("automatic beat preparation controls", () => {
+  it("shows actionable isolated setup and its progress, while preserving analysis Retry", () => {
+    const project = track([]);
+    project.beat_analysis = { status: "error", message: "", error: "Beat setup failed.", setup_required: true };
+    let html = renderToStaticMarkup(<Mixer track={project} />);
+    expect(html).toContain('aria-label="Set up beat tracking"');
+    expect(html).toContain("separate environment");
+    expect(html).not.toContain('aria-label="Retry beat analysis"');
+    project.beat_analysis = { status: "processing", message: "Installing CPU PyTorch…", error: null, setup_required: true };
+    html = renderToStaticMarkup(<Mixer track={project} />);
+    expect(html).toContain("Installing CPU PyTorch…");
+    expect(html).not.toContain('aria-label="Set up beat tracking"');
+    project.beat_analysis = { status: "error", message: "", error: "Beat tracking is not installed. Install dependencies." };
+    html = renderToStaticMarkup(<Mixer track={project} />);
+    expect(html).toContain('aria-label="Set up beat tracking"');
+  });
+
+  it("submits setup once and disables the action while the request is pending", async () => {
+    const project = track([]);
+    project.beat_analysis = { status: "error", message: "", error: "Missing dependencies", setup_required: true };
+    let resolve!: (value: Response) => void;
+    const fetch = vi.fn(() => new Promise<Response>(done => { resolve = done; }));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const h = mixerClickHarness();
+      h.render(project);
+      h.click("Set up beat tracking");
+      h.render(project);
+      expect(h.button("Set up beat tracking").disabled).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch.mock.calls[0]).toEqual([`/api/tracks/${project.id}/beats`, expect.objectContaining({ method: "POST" })]);
+      resolve(Response.json(project));
+      await new Promise(done => setTimeout(done, 0));
+      h.render(project);
+      expect(h.button("Set up beat tracking").disabled).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   for (const status of [undefined, "queued", "processing", "error"] as const) {
     it(`shows only relevant compact controls for ${status ?? "legacy"} analysis`, () => {
       const project = track([]);
