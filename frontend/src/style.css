@@ -535,6 +535,40 @@ h1 em {
   letter-spacing: -1px;
   overflow-wrap: anywhere;
 }
+.track-heading > div {
+  min-width: 0;
+  flex: 1;
+}
+.track-title-row,
+.track-title-editor {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.edit-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.track-title-editor input {
+  flex: 1 1 180px;
+  min-width: 0;
+  width: 100%;
+  padding: 8px;
+  font: inherit;
+  font-size: 22px;
+  color: inherit;
+  background: #22272a;
+  border: 1px solid #58624d;
+  border-radius: 5px;
+}
+.title-error {
+  flex-basis: 100%;
+  color: #efaca1;
+  font-size: 12px;
+}
 .track-heading p {
   font-size: 11px;
   color: #909b96;

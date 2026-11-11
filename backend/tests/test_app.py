@@ -651,6 +651,87 @@ def test_import_decode_and_persist(application):
     assert not (path.parent / "upload").exists()
 
 
+def test_rename_title_persists_without_changing_audio_or_track_state(application, tmp_path):
+    app, client = application
+    tid = uuid4().hex
+    track = app.state.store.put({
+        "id": tid, "title": "Original title", "filename": "original-file.wav",
+        "created_at": "now", "duration": 20, "status": "processing",
+        "message": "Separating", "pending_model": "demucs-6", "active_run": "root",
+        "runs": [
+            {"id": "root", "take_number": 3, "model_id": "demucs-6",
+             "source": {"type": "original"}, "active_children": {"guitar": "child"},
+             "stems": [{"name": "guitar", "file": "guitar.wav"}]},
+            {"id": "child", "source": {"type": "stem", "run_id": "root", "stem_name": "guitar"},
+             "stems": [{"name": "lead", "file": "lead.wav"}]},
+        ],
+        "next_take_number": 7,
+        "practice": {"loops": [{"id": "intro", "name": "Intro", "a": 1, "b": 4, "enabled": True}]},
+        "beat_analysis": {"status": "ready", "beats": [1, 2, 3]},
+    })
+    folder = app.state.store.directory(tid)
+    files = {"original.wav": b"original audio", "runs/root/guitar.wav": b"guitar audio",
+             "runs/child/lead.wav": b"lead audio"}
+    for name, content in files.items():
+        path = folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    url = f"/api/tracks/{tid}"
+    response = client.put(url + "/title", json={"title": "  My song 🎸  "})
+    assert response.status_code == 200, response.text
+    renamed = {**track, "title": "My song 🎸"}
+    assert response.json() == renamed
+    assert client.get(url).json() == renamed
+    assert client.get("/api/tracks").json() == [renamed]
+    # Read through a fresh app/store to prove persistence beyond memory.
+    reopened = create_app(tmp_path, tmp_path / "no-frontend")
+    assert reopened.state.store.get(tid) == renamed
+    assert {str(path.relative_to(folder)): path.read_bytes()
+            for path in folder.rglob("*") if path.is_file() and path.name != "track.json"} == files
+    # Later job updates and repeated renames preserve the title and track state.
+    app.state.store.update(tid, message="Still separating")
+    assert client.put(url + "/title", json={"title": "My song 🎸"}).json()["message"] == "Still separating"
+    assert app.state.started == []
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"title": ""}, {"title": " \t\n "}, {"title": "x" * 201},
+    {"title": "🎸" * 201}, {"title": None}, {"title": 123}, {"title": ["Song"]},
+    {"title": "Song", "filename": "changed.wav"},
+    {"title": "Song", "runs": []},
+])
+def test_rename_rejects_invalid_titles_and_unrelated_fields(application, body):
+    app, client = application
+    tid = uuid4().hex
+    before = app.state.store.put({"id": tid, "title": "Keep me", "runs": [], "created_at": "now"})
+    assert client.put(f"/api/tracks/{tid}/title", json=body).status_code == 422
+    assert app.state.store.get(tid) == before
+
+
+def test_rename_maximum_length_and_missing_track(application):
+    app, client = application
+    tid = uuid4().hex
+    app.state.store.put({"id": tid, "title": "Song", "runs": [], "created_at": "now"})
+    title = "🎸" * 200
+    response = client.put(f"/api/tracks/{tid}/title", json={"title": " " + title + " "})
+    assert response.status_code == 200
+    assert response.json()["title"] == title
+    for missing_id in [uuid4().hex, "invalid-id"]:
+        response = client.put(f"/api/tracks/{missing_id}/title", json={"title": "Song"})
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Track not found."}
+
+
+def test_rename_rejects_cross_origin_requests(application):
+    app, client = application
+    tid = uuid4().hex
+    before = app.state.store.put({"id": tid, "title": "Keep me", "runs": [], "created_at": "now"})
+    response = client.put(f"/api/tracks/{tid}/title", json={"title": "Changed"},
+                          headers={"origin": "https://other.example"})
+    assert response.status_code == 403
+    assert app.state.store.get(tid) == before
+
+
 def test_bad_audio_and_unknown_model_leave_no_projects(application):
     app, client = application
     response = client.post("/api/tracks", files={"file": ("bad.mp3", b"not audio")})

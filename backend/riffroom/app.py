@@ -115,6 +115,16 @@ class ExpansionRequest(BaseModel):
     run_id: str | None = None
 
 
+class TrackTitleRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    title: str = Field(min_length=1, max_length=200)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def trim_title(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
 def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
     store = Store(data / "tracks")
     runtime = AudioSeparatorRuntime(data)
@@ -231,6 +241,10 @@ def create_app(data: Path = DATA, frontend: Path = ROOT / "frontend" / "dist"):
     @app.get("/api/tracks/{track_id}")
     def track(track_id: str):
         return store.get(track_id)
+
+    @app.put("/api/tracks/{track_id}/title")
+    def rename_track(track_id: str, request: TrackTitleRequest):
+        return store.update(track_id, title=request.title)
 
     @app.put("/api/tracks/{track_id}/practice")
     def save_practice(track_id: str, request: PracticeRequest):

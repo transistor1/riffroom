@@ -29,6 +29,7 @@ import {
   type Track,
 } from "./types";
 import Mixer from "./components/Mixer";
+import TrackTitle from "./components/TrackTitle";
 import {
   ensureModelVisible,
   loadVisibleModelIds,
@@ -350,6 +351,7 @@ export default function App() {
     null,
   );
   const fileInput = useRef<HTMLInputElement>(null);
+  const titleRevision = useRef(0);
   const track = tracks.find((t) => t.id === selectedId);
   const run = selectedRunFor(track, runId);
   const rootRuns = track?.runs.filter(isRootRun) ?? [];
@@ -394,9 +396,11 @@ export default function App() {
     return status;
   }, []);
   const refresh = useCallback(async () => {
+    const revision = titleRevision.current;
     try {
       const data = await api<Track[]>("/tracks");
-      setTracks(data);
+      // A poll started before a rename may still contain the previous title.
+      if (revision === titleRevision.current) setTracks(data);
       setError((current) =>
         current.startsWith("Cannot connect") ? "" : current,
       );
@@ -797,7 +801,16 @@ export default function App() {
               <div className="track-heading">
                 <div>
                   <div className="eyebrow">NOW IN THE ROOM</div>
-                  <h1>{track.title}</h1>
+                  <TrackTitle
+                    key={track.id}
+                    track={track}
+                    onRenamed={(id, title) => {
+                      titleRevision.current += 1;
+                      setTracks((current) => current.map((item) =>
+                        item.id === id ? { ...item, title } : item,
+                      ));
+                    }}
+                  />
                   <p>
                     {time(track.duration)} <span>·</span>{" "}
                     {run
