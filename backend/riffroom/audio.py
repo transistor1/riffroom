@@ -72,14 +72,24 @@ def waveform(path: Path, bins: int = 600) -> list[float]:
 
 def validate_stems(paths: dict[str, Path], original: Path):
     expected = sf.info(original)
+    if not paths or expected.frames <= 0:
+        raise ValueError("The separator produced no usable audio. No results were saved.")
     for name, path in paths.items():
         actual = sf.info(path)
         if (
-            actual.frames != expected.frames
+            actual.format not in {"WAV", "WAVEX", "RF64"}
+            or actual.frames != expected.frames
             or actual.samplerate != expected.samplerate
-            or actual.channels != 2
+            or actual.channels != expected.channels
         ):
             raise ValueError(f"The {name} stem isn't aligned with the source. No results were saved.")
+        frames = 0
+        for samples in sf.blocks(path, blocksize=65536, dtype="float32", always_2d=True):
+            frames += len(samples)
+            if not np.isfinite(samples).all():
+                raise ValueError(f"The {name} stem contains invalid audio. No results were saved.")
+        if frames != expected.frames:
+            raise ValueError(f"The {name} stem couldn't be fully read. No results were saved.")
 
 
 def write_float_stem(output: Path, stem_path: str, samples):

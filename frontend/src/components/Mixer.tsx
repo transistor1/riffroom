@@ -63,6 +63,8 @@ const colors: Record<string, string> = {
   other: "#9eb9ad",
   original: "#aebec9",
 };
+const stemIcon = (name: string) =>
+  Object.hasOwn(icons, name) ? icons[name] : Music2;
 const defaults = (stems: Stem[]): Mix =>
   Object.fromEntries(
     stems.map((s) => [s.name, { volume: 1, muted: false, solo: false }]),
@@ -386,12 +388,14 @@ export type ExpansionPoint = {
 export function resolveEffectiveMixer(
   track: Track,
   root: Run,
-): { stems: EffectiveStem[]; expansions: ExpansionPoint[] } {
+): { stems: EffectiveStem[]; expansions: ExpansionPoint[]; warningRuns: Run[] } {
   const runs = new Map(
     track.runs.map((candidate) => [candidate.id, candidate]),
   );
   const stems: EffectiveStem[] = [];
   const expansions: ExpansionPoint[] = [];
+  const warningRuns = new Map<string, Run>();
+  if (root.output_warning) warningRuns.set(root.id, root);
 
   function visit(
     run: Run,
@@ -431,6 +435,7 @@ export function resolveEffectiveMixer(
       });
     }
     if (active) {
+      if (active.output_warning) warningRuns.set(active.id, active);
       const nextAncestors = new Set(ancestors).add(active.id);
       for (const childStem of active.stems) {
         visit(
@@ -458,7 +463,7 @@ export function resolveEffectiveMixer(
 
   for (const stem of root.stems)
     visit(root, stem, 0, stem.name, new Set([root.id]), stem.name);
-  return { stems, expansions };
+  return { stems, expansions, warningRuns: [...warningRuns.values()] };
 }
 
 type MixerProps = {
@@ -934,7 +939,7 @@ export default function Mixer({
         secondary: "Hear just the part",
       };
   const PartIcon = preferredPart
-    ? (icons[normalizedStemName(preferredPart)] ?? Music2)
+    ? stemIcon(normalizedStemName(preferredPart))
     : Music2;
   function selectPerformancePart(part: string) {
     if (resolved && shortcutRef.current.mode !== "none") {
@@ -974,6 +979,21 @@ export default function Mixer({
   }
   return (
     <>
+      {resolved?.warningRuns.map((affectedRun) => (
+        <aside className="output-warning panel" role="status" key={affectedRun.id}>
+          <p>{affectedRun.output_warning!.message}</p>
+          <details>
+            <summary>Output details</summary>
+            <p>
+              {affectedRun.source?.type === "stem"
+                ? `Split ${affectedRun.split_number ?? ""}`
+                : `Take ${affectedRun.take_number ?? ""}`}:
+              {" "}Expected: {affectedRun.output_warning!.expected_stems.join(", ")}.{" "}
+              Actual: {affectedRun.output_warning!.actual_files.join(", ")}.
+            </p>
+          </details>
+        </aside>
+      ))}
       {error && (
         <div className="error" role="alert">
           {error}
@@ -1434,7 +1454,7 @@ export default function Mixer({
             {partMenuOpen && (
               <div className="preset-menu" role="menu">
                 {availableParts.map((part) => {
-                  const ChoiceIcon = icons[normalizedStemName(part)] ?? Music2;
+                  const ChoiceIcon = stemIcon(normalizedStemName(part));
                   return (
                     <button
                       key={part}
@@ -1511,8 +1531,10 @@ export default function Mixer({
           const c = effectiveMix[stem.name],
             effective = stem as EffectiveStem,
             displayName = effective.displayName ?? stem.name,
-            Icon = icons[displayName] ?? Music2,
-            color = colors[displayName] ?? "#aebec9",
+            Icon = stemIcon(displayName),
+            color = Object.hasOwn(colors, displayName)
+              ? colors[displayName]
+              : "#aebec9",
             splitKey = `${effective.sourceRunId}:${effective.sourceStemName}`,
             splitModel = splitModels[splitKey] ?? models[0]?.id ?? "";
           const silent = c.muted || (soloed && !c.solo);

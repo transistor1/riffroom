@@ -294,3 +294,20 @@
   gap: 6px;
 }
 }
+.output-warning {
+  border: 1px solid #c69a50;
+  color: #f0cb8c;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+.output-warning p {
+  margin: 0;
+}
+.output-warning details {
+  margin-top: 6px;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.output-warning summary {
+  cursor: pointer;
+}

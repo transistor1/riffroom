@@ -8,7 +8,12 @@ from types import ModuleType
 
 from riffroom.audio import write_float_stem
 from riffroom.models import ExecutionVariant, ModelProfile
-from riffroom.providers.base import normalized_stem_paths
+from riffroom.providers.base import (
+    completed_stem_paths,
+    custom_output_names,
+    restricted_output_path,
+    validate_output_directory,
+)
 
 _RUNTIME_MODULES = ("mlx_audio_separator", "mlx", "demucs", "torch", "torchaudio")
 _UNAVAILABLE_MESSAGE = (
@@ -53,7 +58,9 @@ class MlxAudioSeparatorProvider:
         *,
         on_model_loaded: Callable[[], None],
     ) -> dict[str, Path]:
+        names = custom_output_names(profile.stems, output_aliases=variant.output_aliases)
         runtime = _load_runtime()
+        validate_output_directory(output)
         try:
             runtime.configure_demucs_cache(cache)
             separator = runtime.LocalSeparator(
@@ -83,8 +90,18 @@ class MlxAudioSeparatorProvider:
             separator.load_model(variant.filename)
         except (ImportError, OSError) as exc:
             raise MlxRuntimeUnavailableError(_UNAVAILABLE_MESSAGE) from exc
-        separator.model_instance.write_audio = lambda path, samples: write_float_stem(output, path, samples)
+
+        def write_audio(path, samples):
+            target = restricted_output_path(output, path)
+            write_float_stem(output, target.name, samples)
+
+        separator.model_instance.write_audio = write_audio
         on_model_loaded()
-        names = {name: name for name in profile.stems}
         separator.separate(str(source), custom_output_names=names)
-        return normalized_stem_paths(profile.stems, output)
+        return completed_stem_paths(
+            profile.stems,
+            output,
+            output_aliases=variant.output_aliases,
+            source=source,
+            model_filename=variant.filename,
+        )

@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import quote
 from uuid import uuid4
 
 from riffroom.models import MODELS, PORTABLE_PROVIDER, resolve_model_variant
@@ -208,9 +209,12 @@ class Jobs:
                     raise RuntimeError(
                         f"Separation stopped (exit {code}). Retry, or try Demucs if RoFormer ran out of memory. Details are in the job log."
                     )
-                stems = json.loads((output / "stems.json").read_text())
+                manifest = json.loads((output / "stems.json").read_text())
+                # Older workers and clean results use the original list manifest.
+                stems = manifest["stems"] if isinstance(manifest, dict) else manifest
+                warning = manifest.get("output_warning") if isinstance(manifest, dict) else None
                 for stem in stems:
-                    stem["url"] = f"/api/tracks/{track_id}/audio/{run_id}/{stem['file']}"
+                    stem["url"] = f"/api/tracks/{track_id}/audio/{run_id}/{quote(stem['file'], safe='')}"
                 with self.store.lock:
                     track = self.store.get(track_id)
                     run = {
@@ -221,6 +225,8 @@ class Jobs:
                         "stems": stems,
                         "active_children": {},
                     }
+                    if warning:
+                        run["output_warning"] = warning
                     if source["type"] == "original":
                         take_number = track["next_take_number"]
                         run["take_number"] = take_number

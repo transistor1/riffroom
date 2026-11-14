@@ -2062,3 +2062,62 @@ describe("optional practice loop snapping (stepped hooks, no DOM)", () => {
     expect(loops(h)[0].a).toBe(0.25);
   });
 });
+
+describe("persistent output warnings", () => {
+  const warning: NonNullable<Run["output_warning"]> = {
+    code: "unexpected_model_outputs",
+    message: "The separation model's output differed from what Riffroom expected. The results are available using their output filenames. This may indicate a model compatibility mismatch. Please notify the developer.",
+    expected_stems: ["vocals", "instrumental"],
+    actual_files: ["vocals.wav", "hiccup.wav"],
+  };
+
+  it("renders the selected take warning and raw filename channels, including after reload", () => {
+    const affected = { ...root("root-a", ["vocals", "hiccup"]), output_warning: warning };
+    const clean = root("root-b", ["vocals", "instrumental"]);
+    const project = track([affected, clean]);
+    for (const selected of [affected, JSON.parse(JSON.stringify(affected)) as Run]) {
+      const html = renderToStaticMarkup(<Mixer track={project} run={selected} />);
+      expect(html).toContain("differed from what Riffroom expected");
+      expect(html).toContain("Please notify the developer.");
+      expect(html).toContain("Expected: vocals, instrumental");
+      expect(html).toContain("Actual: vocals.wav, hiccup.wav");
+      expect(html).toContain("hiccup volume");
+      expect(html).toContain("Download hiccup");
+    }
+    for (const selected of [clean, undefined]) {
+      const html = renderToStaticMarkup(<Mixer track={project} run={selected} />);
+      expect(html).not.toContain("differed from what Riffroom expected");
+    }
+  });
+
+  it("shows warnings only for active child splits and keeps unknown stems splittable", () => {
+    const parent = root("root-a", ["drums", "bass"]);
+    const affected = { ...child("child", parent.id, "drums", ["hiccup", "odd part"]), output_warning: warning };
+    const clean = child("clean", parent.id, "drums", ["kick"]);
+    const project = track([parent, affected, clean]);
+    expect(resolveEffectiveMixer(project, parent).warningRuns).toEqual([]);
+    parent.active_children = { drums: affected.id };
+    const resolved = resolveEffectiveMixer(project, parent);
+    expect(resolved.warningRuns.map(run => run.id)).toEqual([affected.id]);
+    expect(resolved.stems[0]).toMatchObject({ sourceRunId: affected.id, sourceStemName: "hiccup" });
+    const html = renderToStaticMarkup(<Mixer track={project} run={parent} />);
+    expect(html).toContain("differed from what Riffroom expected");
+    expect(html).toContain("Split 1");
+    parent.active_children = { drums: clean.id };
+    expect(renderToStaticMarkup(<Mixer track={project} run={parent} />))
+      .not.toContain("differed from what Riffroom expected");
+    parent.active_children = {};
+    expect(resolveEffectiveMixer(project, parent).warningRuns).toEqual([]);
+  });
+
+  it("escapes filename diagnostics and renders unknown labels without inherited icons", () => {
+    const affected = { ...root("root-a", ["constructor", "unknown_part"]), output_warning: {
+      ...warning, actual_files: ["<img src=x onerror=alert(1)>.wav"],
+    } };
+    const html = renderToStaticMarkup(<Mixer track={track([affected])} run={affected} />);
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;.wav");
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("constructor volume");
+    expect(html).toContain("unknown_part volume");
+  });
+});

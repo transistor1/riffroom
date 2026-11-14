@@ -11,6 +11,12 @@ export type Run = {
   active_children?: Record<string, string>;
   next_split_numbers?: Record<string, number>;
   stems: Stem[];
+  output_warning?: {
+    code: "unexpected_model_outputs";
+    message: string;
+    expected_stems: string[];
+    actual_files: string[];
+  };
 };
 export type PracticeLoop = {
   id: string;

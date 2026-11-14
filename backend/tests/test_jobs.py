@@ -535,3 +535,64 @@ def test_successful_job_keeps_gap_and_uses_persisted_next_take_number(tmp_path, 
         assert track["next_take_number"] == 7
 
     asyncio.run(run())
+
+
+def test_output_warning_persists_per_root_and_child_run_and_unknown_stem_remains_a_source(tmp_path, monkeypatch):
+    from riffroom.providers.base import completed_stem_paths
+
+    warning_output = tmp_path / "warning-output"
+    warning_output.mkdir()
+    for name in ("vocals", "hiccup"):
+        (warning_output / f"{name}.wav").touch()
+    warning = completed_stem_paths(("vocals", "instrumental"), warning_output).output_warning
+    spawned = []
+
+    class SuccessfulProcess:
+        returncode = 0
+        stdout = None
+
+        async def wait(self):
+            return 0
+
+    async def fake_worker(*args, **kwargs):
+        spawned.append(args)
+        output = Path(args[4])
+        filename = "odd #1.wav"
+        assert {path.name for path in output.iterdir()} == {"job.log"}
+        assert len({call[4] for call in spawned}) == len(spawned)
+        (output / filename).touch()
+        stems = [{"name": "hiccup", "file": filename, "peaks": [0.5]}]
+        payload = {"stems": stems, "output_warning": warning} if len(spawned) < 3 else stems
+        (output / "stems.json").write_text(json.dumps(payload))
+        process = SuccessfulProcess()
+        process.stdout = asyncio.StreamReader()
+        process.stdout.feed_eof()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_worker)
+
+    async def run():
+        store = Store(tmp_path / "tracks")
+        tid = uuid4().hex
+        store.put({"id": tid, "status": "idle", "runs": [], "created_at": "now"})
+        add_original(store, tid)
+        jobs = Jobs(store, tmp_path / "models", provider_registry={"mlx-audio-separator": AvailableProvider()})
+        jobs.start(tid, "roformer-vocals")
+        await jobs.tasks[tid]
+        root = store.get(tid)["runs"][0]
+        jobs.start(tid, "roformer-vocals", {"type": "stem", "run_id": root["id"], "stem_name": "hiccup"})
+        await jobs.tasks[tid]
+        jobs.start(tid, "roformer-vocals")
+        await jobs.tasks[tid]
+        # Reload from disk to exercise persistence and backward-compatible store migration.
+        track = Store(store.root).get(tid)
+        root, child, clean = track["runs"]
+        assert root["output_warning"] == child["output_warning"] == warning
+        assert "output_warning" not in clean
+        assert root["take_number"] == 1 and clean["take_number"] == 2
+        assert child["split_number"] == 1
+        assert Path(spawned[1][3]).name == "odd #1.wav"
+        assert root["stems"][0]["url"].endswith("/odd%20%231.wav")
+        assert track["active_run"] == clean["id"]
+
+    asyncio.run(run())

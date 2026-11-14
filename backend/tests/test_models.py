@@ -57,7 +57,10 @@ def test_kimberley_vocals_is_a_trusted_curated_profile(tmp_path):
     assert model.source == "https://huggingface.co/KimberleyJSN/melbandroformer"
     assert (model.license, model.terms_status) == ("MIT", "open")
     assert model.variants == (
-        ExecutionVariant(MLX_PROVIDER, "vocals_mel_band_roformer.ckpt", ("macos-arm64",), True),
+        ExecutionVariant(
+            MLX_PROVIDER, "vocals_mel_band_roformer.ckpt", ("macos-arm64",), True,
+            output_aliases=(("other", "instrumental"),),
+        ),
         ExecutionVariant(
             PORTABLE_PROVIDER,
             "vocals_mel_band_roformer.ckpt",
@@ -236,7 +239,8 @@ def test_portable_curated_candidates_are_exact_and_keep_mlx_preferred():
     for model_id, filename in expected.items():
         model = CURATED_MODELS[model_id]
         assert model.variants[0] == ExecutionVariant(
-            MLX_PROVIDER, filename, ("macos-arm64",), True
+            MLX_PROVIDER, filename, ("macos-arm64",), True,
+            output_aliases=(("other", "instrumental"),) if model_id == "roformer-vocals" else (),
         )
         assert model.variants[1] == PORTABLE_CANDIDATE_VARIANTS[filename]
         assert (

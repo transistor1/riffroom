@@ -1155,3 +1155,24 @@ def test_beat_setup_failure_can_be_retried_without_reopening(application, monkey
     client.post(f"/api/tracks/{tid}/beats")
     wait_for_beats(client, tid, "ready")
     assert calls == [tid, tid]
+
+
+def test_unknown_filename_stems_can_be_served_and_split_further(application):
+    app, client = application
+    track = upload(client)
+    tid, run_id = track["id"], uuid4().hex
+    folder = app.state.store.directory(tid) / "runs" / run_id
+    folder.mkdir(parents=True)
+    filename = "hiccup #1.wav"
+    (folder / filename).write_bytes(wav_bytes())
+    app.state.store.update(tid, runs=[{
+        "id": run_id, "model_id": "roformer-vocals", "stems": [{"name": "hiccup", "file": filename}],
+        "output_warning": {"code": "unexpected_model_outputs", "message": "Runtime mismatch"},
+    }])
+    assert client.get(f"/api/tracks/{tid}/audio/{run_id}/hiccup%20%231.wav").status_code == 200
+    assert app.state.jobs._source_path(tid, {"type": "stem", "run_id": run_id, "stem_name": "hiccup"}) == (
+        folder / filename
+    )
+    assert client.get(f"/api/tracks/{tid}").json()["runs"][0]["output_warning"]["code"] == (
+        "unexpected_model_outputs"
+    )

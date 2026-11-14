@@ -86,8 +86,10 @@ PORTABLE_PROVIDER = "audio-separator"
 DEMUCS_6_FILENAME = "htdemucs_6s.yaml"
 
 
-def _mlx_variant(filename: str) -> ExecutionVariant:
-    return ExecutionVariant(MLX_PROVIDER, filename, ("macos-arm64",), True)
+def _mlx_variant(
+    filename: str, *, output_aliases: tuple[tuple[str, str], ...] = ()
+) -> ExecutionVariant:
+    return ExecutionVariant(MLX_PROVIDER, filename, ("macos-arm64",), True, output_aliases=output_aliases)
 
 
 def _portable_variant(filename: str, *, windows_validated: bool = False) -> ExecutionVariant:
@@ -281,7 +283,7 @@ CURATED_MODELS = {
             "RoFormer",
             "open",
             (
-                _mlx_variant("vocals_mel_band_roformer.ckpt"),
+                _mlx_variant("vocals_mel_band_roformer.ckpt", output_aliases=(("other", "instrumental"),)),
                 PORTABLE_CANDIDATE_VARIANTS["vocals_mel_band_roformer.ckpt"],
             ),
             ("vocals_mel_band_roformer.ckpt", "vocals_mel_band_roformer.yaml"),

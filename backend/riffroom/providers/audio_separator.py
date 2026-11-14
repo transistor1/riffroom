@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 from riffroom.models import ExecutionVariant, ModelProfile
-from riffroom.providers.base import normalized_stem_paths
+from riffroom.providers.base import completed_stem_paths, custom_output_names, validate_output_directory
 from riffroom.providers.listra92 import MODEL_ID
 
 _UNAVAILABLE_MESSAGE = (
@@ -80,15 +80,8 @@ class AudioSeparatorCliProvider:
         if executable is None:
             raise RuntimeError(_UNAVAILABLE_MESSAGE)
 
-        output_names = {name: name for name in profile.stems}
-        for upstream_name, logical_name in variant.output_aliases:
-            if logical_name not in output_names or upstream_name in output_names:
-                raise ValueError(
-                    f"Invalid trusted output alias for model {profile.id}: "
-                    f"{upstream_name} -> {logical_name}"
-                )
-            del output_names[logical_name]
-            output_names[upstream_name] = logical_name
+        output_names = custom_output_names(profile.stems, output_aliases=variant.output_aliases)
+        validate_output_directory(output)
         # The pinned 0.47.0 CLI has no CUDA device option. Separator automatically
         # chooses CUDA when its Torch runtime reports it available, else CPU.
         argv = [
@@ -129,10 +122,12 @@ class AudioSeparatorCliProvider:
                 message += f" {detail}"
             message += " Check the worker log for details."
             raise RuntimeError(message)
-        return normalized_stem_paths(
+        return completed_stem_paths(
             profile.stems,
             output,
             output_aliases=variant.output_aliases,
+            source=source,
+            model_filename=variant.filename,
         )
 
     @staticmethod
